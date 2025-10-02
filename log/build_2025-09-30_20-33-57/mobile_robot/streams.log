@@ -1,0 +1,20 @@
+[0.459s] Invoking command in '/home/adharsh/ws_mobile/src/mobile_robot': DEBUGINFOD_URLS=https://debuginfod.ubuntu.com PYTHONPATH=/home/adharsh/ws_mobile/build/mobile_robot/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/adharsh/ws_mobile/install/mobile_robot/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/mobile_robot build --build-base /home/adharsh/ws_mobile/build/mobile_robot/build install --record /home/adharsh/ws_mobile/build/mobile_robot/install.log --single-version-externally-managed install_data
+[0.607s] running egg_info
+[0.617s] writing ../../build/mobile_robot/mobile_robot.egg-info/PKG-INFO
+[0.617s] writing dependency_links to ../../build/mobile_robot/mobile_robot.egg-info/dependency_links.txt
+[0.617s] writing requirements to ../../build/mobile_robot/mobile_robot.egg-info/requires.txt
+[0.617s] writing top-level names to ../../build/mobile_robot/mobile_robot.egg-info/top_level.txt
+[0.638s] reading manifest file '../../build/mobile_robot/mobile_robot.egg-info/SOURCES.txt'
+[0.638s] writing manifest file '../../build/mobile_robot/mobile_robot.egg-info/SOURCES.txt'
+[0.638s] running build
+[0.638s] running build_py
+[0.638s] running install
+[0.642s] running install_lib
+[0.653s] running install_data
+[0.653s] copying model/robot.xacro -> /home/adharsh/ws_mobile/install/mobile_robot/share/mobile_robot/model
+[0.653s] running install_egg_info
+[0.664s] removing '/home/adharsh/ws_mobile/install/mobile_robot/lib/python3.12/site-packages/mobile_robot-0.0.0-py3.12.egg-info' (and everything under it)
+[0.664s] Copying ../../build/mobile_robot/mobile_robot.egg-info to /home/adharsh/ws_mobile/install/mobile_robot/lib/python3.12/site-packages/mobile_robot-0.0.0-py3.12.egg-info
+[0.664s] running install_scripts
+[0.735s] writing list of installed files to '/home/adharsh/ws_mobile/build/mobile_robot/install.log'
+[0.753s] Invoked command in '/home/adharsh/ws_mobile/src/mobile_robot' returned '0': DEBUGINFOD_URLS=https://debuginfod.ubuntu.com PYTHONPATH=/home/adharsh/ws_mobile/build/mobile_robot/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/adharsh/ws_mobile/install/mobile_robot/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/mobile_robot build --build-base /home/adharsh/ws_mobile/build/mobile_robot/build install --record /home/adharsh/ws_mobile/build/mobile_robot/install.log --single-version-externally-managed install_data

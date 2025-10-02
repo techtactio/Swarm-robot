@@ -1,0 +1,2 @@
+[console_scripts]
+controller_final = mobile_robot.controller_final:main
