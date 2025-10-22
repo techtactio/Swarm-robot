@@ -18,6 +18,7 @@ class ControllerNode(Node):
         self.xdp = xdu
         self.ydp = ydu
 
+        # Tunable parameters
         self.kap = kau
         self.krp = kru
         self.kthetap = kthetau
@@ -38,6 +39,7 @@ class ControllerNode(Node):
         self.goal_reached = False
 
     def orientationError(self, theta_, thetad_):
+        # Handles angle wrap-around
         if (thetad_ > np.pi/2) and (thetad_ <= np.pi):
             if (theta_ > -np.pi) and (theta_ <= -np.pi/2):
                 theta_ += 2*np.pi
@@ -59,6 +61,7 @@ class ControllerNode(Node):
             self.controlPublisher.publish(self.controlVel)
             return
 
+        # Pose extraction
         x = self.OdometryMsg.pose.pose.position.x
         y = self.OdometryMsg.pose.pose.position.y
         quat = self.OdometryMsg.pose.pose.orientation
@@ -66,11 +69,11 @@ class ControllerNode(Node):
         roll, pitch, yaw = quat2euler([quatl[3], quatl[0], quatl[1], quatl[2]])
         theta = yaw
 
-        # Distance and vector to goal
+        # Vector to goal
         vectorD = np.array([[self.xdp - x], [self.ydp - y]])
         dist_to_goal = np.linalg.norm(vectorD)
 
-        # Stop at goal
+        # Stop condition
         if dist_to_goal < self.eps_control:
             print(f"Goal reached at ({x:.3f}, {y:.3f})!")
             self.goal_reached = True
@@ -79,42 +82,57 @@ class ControllerNode(Node):
             self.controlPublisher.publish(self.controlVel)
             return
 
-        # Attractive Force (towards goal)
+        # Attractive force (weakened near obstacles automatically)
         AF = self.kap * vectorD
 
-        # Obstacle Repulsion
-        LidarRanges = np.array(self.LidarMsg.ranges)
-        indices = np.where(~np.isinf(LidarRanges))[0]
+        # Repulsive force from obstacles
         RF = np.array([[0.0], [0.0]])
-        if indices.size > 0:
-            angle_min = self.LidarMsg.angle_min
-            angle_inc = self.LidarMsg.angle_increment
-            for i in indices:
-                r = LidarRanges[i]
-                if r < self.gstarp and r > 0.01:  # avoid divide by zero
-                    angle = angle_min + i * angle_inc + theta
-                    obs_vec = np.array([[x + r*np.cos(angle)], [y + r*np.sin(angle)]])
-                    diff = np.array([[x - obs_vec[0,0]], [y - obs_vec[1,0]]])
-                    pr = self.krp * (1/self.gstarp - 1/r) * (1/(r**3))
-                    RF += pr * diff
+        if hasattr(self.LidarMsg, 'ranges') and len(self.LidarMsg.ranges) > 0:
+            LidarRanges = np.array(self.LidarMsg.ranges)
+            indices = np.where(~np.isinf(LidarRanges))[0]
+            if indices.size > 0:
+                angle_min = self.LidarMsg.angle_min
+                angle_inc = self.LidarMsg.angle_increment
+                near_obstacle = False
 
-        # Wall Repulsion (disabled near goal)
+                for i in indices:
+                    r = LidarRanges[i]
+                    if 0.05 < r < self.gstarp:
+                        near_obstacle = True
+                        angle = angle_min + i * angle_inc + theta
+
+                        # Obstacle position and direction
+                        obs_vec = np.array([[x + r*np.cos(angle)], [y + r*np.sin(angle)]])
+                        diff = np.array([[x - obs_vec[0,0]], [y - obs_vec[1,0]]])
+                        diff_norm = np.linalg.norm(diff)
+                        if diff_norm == 0:
+                            continue
+
+                        # Normalized repulsion (1/r^2 instead of 1/r^3)
+                        pr = self.krp * (1/self.gstarp - 1/r) * (1/(r**2))
+                        radial = (diff / diff_norm)
+                        
+                        # Tangential (90° rotated) component
+                        tang = np.array([[-radial[1,0]], [radial[0,0]]])
+                        
+                        # Combine radial + tangential (weighted)
+                        RF += pr * (radial + 0.3 * tang)
+
+                # weaken attraction if near obstacles
+                if near_obstacle:
+                    AF *= 0.3
+
+        # Wall repulsion (arena boundaries)
         L = 10.0
         gradUw = np.array([[0.0], [0.0]])
         gstar_wall = 1.5
         kr_wall = 5.0
+        wall_multiplier = 0.0 if dist_to_goal < 1.0 else 1.0
 
-        # Apply wall repulsion only if robot is not very close to goal
-        wall_multiplier = 1.0
-        if dist_to_goal < 1.0:
-            wall_multiplier = 0.0
-
-        # X walls
         if x <= -L + gstar_wall:
             gradUw += kr_wall * np.array([[1.0], [0.0]])
         if x >= L - gstar_wall:
             gradUw += kr_wall * np.array([[-1.0], [0.0]])
-        # Y walls
         if y <= -L + gstar_wall:
             gradUw += kr_wall * np.array([[0.0], [1.0]])
         if y >= L - gstar_wall:
@@ -122,38 +140,51 @@ class ControllerNode(Node):
 
         gradUw *= wall_multiplier
 
-        # Total force
+        # Total combined force
         F = AF + RF + gradUw
 
-        # Desired orientation
+        # Limit overall force magnitude for smoother motion
+        max_force = 2.0
+        F_norm = np.linalg.norm(F)
+        if F_norm > max_force:
+            F = (F / F_norm) * max_force
+
+        # Desired heading
         thetaD = math.atan2(F[1,0], F[0,0])
         eorient = self.orientationError(theta, thetaD)
 
-        # Velocity Control
+        # Velocity control
         if np.abs(eorient) > self.eps_orient:
             thetavel = self.kthetap * eorient
             xvel = 0.0
         else:
             thetavel = self.kthetap * eorient
             xvel = np.linalg.norm(F)
-            # Slow down as approaching goal
             if dist_to_goal < 1.0:
                 xvel *= dist_to_goal / 1.0
                 xvel = max(xvel, 0.5)
 
-        # Publish velocity
+        # Publish control
         self.controlVel.linear.x = xvel
         self.controlVel.angular.z = thetavel
         self.controlPublisher.publish(self.controlVel)
 
-        # Debug print
-        print(f"x={x:.3f}, y={y:.3f}, theta={theta:.3f}, xvel={xvel:.3f}, thetavel={thetavel:.3f}")
+        # Debug
+        print(f"x={x:.3f}, y={y:.3f}, θ={theta:.3f}, |F|={np.linalg.norm(F):.3f}, v={xvel:.3f}, ω={thetavel:.3f}")
 
 def main(args=None):
     rclpy.init(args=args)
-    xd_u = 0
-    yd_u = 0
-    node = ControllerNode(xd_u, yd_u, 0.6, 0.8, 2.0, 1.0, np.pi/18, 0.05)
+    # Adjusted parameters for balanced navigation
+    xd_u = 7.0
+    yd_u = 7.0
+    kap = 0.3          # attraction strength
+    krp = 2.0          # repulsion strength
+    kthetap = 2.0      # orientation gain
+    gstarp = 1.5       # obstacle influence range
+    eps_orient = np.pi / 18
+    eps_control = 0.05
+
+    node = ControllerNode(xd_u, yd_u, kap, krp, kthetap, gstarp, eps_orient, eps_control)
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()

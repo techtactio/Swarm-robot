@@ -162,6 +162,52 @@
     <xacro:inertia_caster />
   </link>
 
+  <!-- Sloped front (wedge) -->
+<joint name="slope_joint" type="fixed">
+  <parent link="body_link"/>
+  <child link="slope_link"/>
+</joint>
+
+<link name="slope_link">
+  <visual>
+    <origin xyz="${a/2} 0 ${b/2}" rpy="3.14 2.54 0"/> <!-- tilt the wedge -->
+    <geometry>
+      <box size="0.05 ${c} 0.25"/> <!-- thin in X, full width Y, height Z -->
+    </geometry>
+
+  </visual>
+  <collision>
+    <geometry>
+      <box size="0.05 ${c} 0.25"/>
+    </geometry>
+    <origin xyz="${a/2} 0 ${b/2}" rpy="3.14 2.54 0"/>
+  </collision>
+</link>
+
+<!-- Roller --> 
+<!-- <joint name="roller_joint" type="continuous"> 
+  <parent link="body_link"/>
+  <child link="roller_link"/> 
+  <origin xyz="${a} 0 ${s1}" rpy="2.54 0 0"/> 
+  <axis xyz="0 0 1"/> 
+  <!----rotation axis --> 
+  <limit effort="10" velocity="5"/> 
+</joint> 
+<link name="roller_link"> 
+<visual> 
+<origin xyz="${a/2} 0 ${b/2 + 0.05}" rpy="0 1.5708 0"/> 
+  <geometry> 
+    <cylinder radius="0.05" length="${c}"/> <!-- length same as body width --> 
+  </geometry> 
+</visual> 
+<collision> 
+  <geometry> 
+    <cylinder radius="0.05" length="${c}"/> 
+  </geometry> <origin xyz="${a/2} 0 0.05" rpy="0 1.5708 0"/>
+ </collision> 
+</link> -->
+
+
   <!-- Lidar -->
   <joint name="lidar_joint" type="fixed">
     <origin xyz="0.0 0 ${b+r}" rpy="0 0 0"/>
