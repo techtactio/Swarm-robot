@@ -1,0 +1,5 @@
+  File "/home/adharsh/Desktop/Swarm-robot/install/mobile_robot/lib/python3.12/site-packages/mobile_robot/controller_final.py", line 157
+    i       if near and np.linalg.norm(RF) > np.linalg.norm(AF):
+                                                               ^
+SyntaxError: invalid syntax
+

@@ -1,0 +1,25 @@
+[0.474s] Invoking command in '/home/adharsh/Desktop/Swarm-robot/src/mobile_robot': DEBUGINFOD_URLS=https://debuginfod.ubuntu.com PYTHONPATH=/home/adharsh/Desktop/Swarm-robot/build/mobile_robot/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/adharsh/Desktop/Swarm-robot/install/mobile_robot/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/mobile_robot build --build-base /home/adharsh/Desktop/Swarm-robot/build/mobile_robot/build install --record /home/adharsh/Desktop/Swarm-robot/build/mobile_robot/install.log --single-version-externally-managed install_data
+[0.625s] running egg_info
+[0.635s] writing ../../build/mobile_robot/mobile_robot.egg-info/PKG-INFO
+[0.635s] writing dependency_links to ../../build/mobile_robot/mobile_robot.egg-info/dependency_links.txt
+[0.635s] writing entry points to ../../build/mobile_robot/mobile_robot.egg-info/entry_points.txt
+[0.635s] writing requirements to ../../build/mobile_robot/mobile_robot.egg-info/requires.txt
+[0.635s] writing top-level names to ../../build/mobile_robot/mobile_robot.egg-info/top_level.txt
+[0.655s] reading manifest file '../../build/mobile_robot/mobile_robot.egg-info/SOURCES.txt'
+[0.656s] writing manifest file '../../build/mobile_robot/mobile_robot.egg-info/SOURCES.txt'
+[0.656s] running build
+[0.656s] running build_py
+[0.656s] copying mobile_robot/controller_final.py -> /home/adharsh/Desktop/Swarm-robot/build/mobile_robot/build/lib/mobile_robot
+[0.656s] running install
+[0.660s] running install_lib
+[0.670s] copying /home/adharsh/Desktop/Swarm-robot/build/mobile_robot/build/lib/mobile_robot/controller_final.py -> /home/adharsh/Desktop/Swarm-robot/install/mobile_robot/lib/python3.12/site-packages/mobile_robot
+[0.671s] byte-compiling /home/adharsh/Desktop/Swarm-robot/install/mobile_robot/lib/python3.12/site-packages/mobile_robot/controller_final.py to controller_final.cpython-312.pyc
+[0.672s] Sorry: IndentationError: unexpected indent (controller_final.py, line 162)
+[0.672s] running install_data
+[0.672s] running install_egg_info
+[0.684s] removing '/home/adharsh/Desktop/Swarm-robot/install/mobile_robot/lib/python3.12/site-packages/mobile_robot-0.0.0-py3.12.egg-info' (and everything under it)
+[0.684s] Copying ../../build/mobile_robot/mobile_robot.egg-info to /home/adharsh/Desktop/Swarm-robot/install/mobile_robot/lib/python3.12/site-packages/mobile_robot-0.0.0-py3.12.egg-info
+[0.684s] running install_scripts
+[0.757s] Installing controller_final script to /home/adharsh/Desktop/Swarm-robot/install/mobile_robot/lib/mobile_robot
+[0.757s] writing list of installed files to '/home/adharsh/Desktop/Swarm-robot/build/mobile_robot/install.log'
+[0.779s] Invoked command in '/home/adharsh/Desktop/Swarm-robot/src/mobile_robot' returned '0': DEBUGINFOD_URLS=https://debuginfod.ubuntu.com PYTHONPATH=/home/adharsh/Desktop/Swarm-robot/build/mobile_robot/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/adharsh/Desktop/Swarm-robot/install/mobile_robot/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/mobile_robot build --build-base /home/adharsh/Desktop/Swarm-robot/build/mobile_robot/build install --record /home/adharsh/Desktop/Swarm-robot/build/mobile_robot/install.log --single-version-externally-managed install_data
