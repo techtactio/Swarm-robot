@@ -12,6 +12,14 @@ def generate_launch_description():
     namePackage = 'mobile_robot'
     modelFileRelativePath = 'model/robot.xacro'
 
+    world_path = os.path.join(
+    get_package_share_directory('mobile_robot'),
+    'worlds',
+    'arena_walls.world'
+    )
+    
+
+
     # Process robot.xacro
     pathModelFile = os.path.join(
         get_package_share_directory(namePackage),
@@ -30,7 +38,7 @@ def generate_launch_description():
     gazeboLaunch = IncludeLaunchDescription(
         gazebo_rosPackageLaunch,
         launch_arguments={
-            'gz_args': '-r -v4 empty.sdf',
+            'gz_args': f'-r -v4 {world_path}',
             'on_exit_shutdown': 'true'
         }.items()
     )

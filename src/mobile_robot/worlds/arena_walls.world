@@ -1,0 +1,117 @@
+<?xml version="1.0" ?>
+<sdf version="1.7">
+  <world name="default">
+
+    <!-- Disable skybox, force white background -->
+    <scene>
+      <sky>
+        <box>0</box>
+      </sky>
+      <background>1 1 1 1</background>
+      <ambient>1 1 1 1</ambient>
+    </scene>
+
+    <!-- Bright directional light -->
+    <light type="directional" name="sun">
+      <cast_shadows>false</cast_shadows>
+      <pose>0 0 20 0 0 0</pose>
+      <diffuse>1 1 1 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.4 0.4 -1</direction>
+    </light>
+
+    <!-- Pure white ground -->
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>200 200</size>
+            </plane>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>200 200</size>
+            </plane>
+          </geometry>
+          <material>
+            <ambient>1 1 1 1</ambient>
+            <diffuse>1 1 1 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- BLACK walls -->
+    <model name="arena_walls">
+      <static>true</static>
+
+      <!-- Left Wall -->
+      <link name="left_wall">
+        <collision name="collision">
+          <geometry><box><size>0.2 20 2</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.2 20 2</size></box></geometry>
+          <material>
+            <ambient>0 0 0 1</ambient>
+            <diffuse>0 0 0 1</diffuse>
+          </material>
+        </visual>
+        <pose>-10 0 1 0 0 0</pose>
+      </link>
+
+      <!-- Right Wall -->
+      <link name="right_wall">
+        <collision name="collision">
+          <geometry><box><size>0.2 20 2</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.2 20 2</size></box></geometry>
+          <material>
+            <ambient>0 0 0 1</ambient>
+            <diffuse>0 0 0 1</diffuse>
+          </material>
+        </visual>
+        <pose>10 0 1 0 0 0</pose>
+      </link>
+
+      <!-- Back Wall -->
+      <link name="back_wall">
+        <collision name="collision">
+          <geometry><box><size>20 0.2 2</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>20 0.2 2</size></box></geometry>
+          <material>
+            <ambient>0 0 0 1</ambient>
+            <diffuse>0 0 0 1</diffuse>
+          </material>
+        </visual>
+        <pose>0 -10 1 0 0 0</pose>
+      </link>
+
+      <!-- Front Wall -->
+      <link name="front_wall">
+        <collision name="collision">
+          <geometry><box><size>20 0.2 2</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>20 0.2 2</size></box></geometry>
+          <material>
+            <ambient>0 0 0 1</ambient>
+            <diffuse>0 0 0 1</diffuse>
+          </material>
+        </visual>
+        <pose>0 10 1 0 0 0</pose>
+      </link>
+
+    </model>
+
+  </world>
+</sdf>

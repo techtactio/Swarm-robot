@@ -8,6 +8,7 @@
 /home/adharsh/Desktop/Swarm-robot/install/mobile_robot/share/mobile_robot/model/robot.xacro
 /home/adharsh/Desktop/Swarm-robot/install/mobile_robot/share/mobile_robot/model/robot.gazebo
 /home/adharsh/Desktop/Swarm-robot/install/mobile_robot/share/mobile_robot/parameters/bridge_parameters.yaml
+/home/adharsh/Desktop/Swarm-robot/install/mobile_robot/share/mobile_robot/worlds/arena_walls.world
 /home/adharsh/Desktop/Swarm-robot/install/mobile_robot/lib/python3.12/site-packages/mobile_robot-0.0.0-py3.12.egg-info/zip-safe
 /home/adharsh/Desktop/Swarm-robot/install/mobile_robot/lib/python3.12/site-packages/mobile_robot-0.0.0-py3.12.egg-info/entry_points.txt
 /home/adharsh/Desktop/Swarm-robot/install/mobile_robot/lib/python3.12/site-packages/mobile_robot-0.0.0-py3.12.egg-info/requires.txt

@@ -198,8 +198,8 @@ def main(args=None):
     rclpy.init(args=args)
 
     # --- Better TUNING ---
-    xd = 7.0
-    yd = 7.0
+    xd = 11
+    yd = 11
 
     kap = 0.25
     krp = 1.5
