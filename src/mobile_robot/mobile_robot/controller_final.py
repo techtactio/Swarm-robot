@@ -1,219 +1,168 @@
-import numpy as np
-import math
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
-from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
+from nav_msgs.msg import Odometry
+import numpy as np
+import math
 from transforms3d.euler import quat2euler
 
-topic1 = '/cmd_vel'
-topic2 = '/odom1'
-topic3 = '/scan'
+
+class WallFollower(Node):
+    def __init__(self):
+        super().__init__('wall_follower')
+
+        self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
+        self.scan_sub = self.create_subscription(LaserScan, '/scan', self.lidar_callback, 10)
+        self.odom_sub = self.create_subscription(Odometry, '/odom1', self.odom_callback, 10)
+
+        # Spawn-frame storage
+        self.start_x = None
+        self.start_y = None
+        self.start_yaw = None
+
+        # Current local-frame position
+        self.X = 0.0
+        self.Y = 0.0
+        self.yaw = None
+
+        self.turn_start_yaw = None
+        self.turning_90 = False
+        self.done = False
+
+        self.front_idx = None
+        self.left_idx = None
+        self.right_idx = None
+
+        self.get_logger().info("Wall follower with local coordinate frame active.")
+
+    def odom_callback(self, msg):
+        q = msg.pose.pose.orientation
+        _, _, yaw = quat2euler([q.w, q.x, q.y, q.z])
+        self.yaw = yaw
+
+        raw_x = msg.pose.pose.position.x
+        raw_y = msg.pose.pose.position.y
+
+        # Save spawn point and heading
+        if self.start_x is None:
+            self.start_x = raw_x
+            self.start_y = raw_y
+            self.start_yaw = yaw
+            self.get_logger().info("Local frame initialized at spawn.")
+
+        dx = raw_x - self.start_x
+        dy = raw_y - self.start_y
+
+        # Project movement onto robot's forward (+Y) axis
+        self.Y = dx * math.cos(self.start_yaw) + dy * math.sin(self.start_yaw)
+
+        # Sideways drift (not used but available)
+        self.X = -dx * math.sin(self.start_yaw) + dy * math.cos(self.start_yaw)
 
 
-class ControllerNode(Node):
+    def compute_indices(self, scan):
+        angle_min = scan.angle_min
+        inc = scan.angle_increment
 
-    def __init__(self, xdu, ydu, kau, kru, kthetau, gstaru, eps_orientu, eps_controlu):
-        super().__init__('controller_node')
+        def a2i(a):
+            return int((a - angle_min) / inc)
 
-        self.xdp = xdu
-        self.ydp = ydu
+        self.front_idx = a2i(0.0)
+        self.left_idx  = a2i(math.pi/2)
+        self.right_idx = a2i(-math.pi/2)
 
-        # Tunable parameters (fixed & balanced)
-        self.kap = kau
-        self.krp = kru
-        self.kthetap = kthetau
-        self.gstarp = gstaru
-        self.eps_orient = eps_orientu
-        self.eps_control = eps_controlu
+        N = len(scan.ranges)
+        self.front_idx = max(0, min(N-1, self.front_idx))
+        self.left_idx  = max(0, min(N-1, self.left_idx))
+        self.right_idx = max(0, min(N-1, self.right_idx))
 
-        self.OdometryMsg = Odometry()
-        self.LidarMsg = LaserScan()
-        self.controlVel = Twist()
+        self.get_logger().info(f"Indices: F={self.front_idx}, L={self.left_idx}, R={self.right_idx}")
 
-        self.controlPublisher = self.create_publisher(Twist, topic1, 10)
-        self.poseSubscriber = self.create_subscription(Odometry, topic2, self.SensorCallbackPose, 10)
-        self.lidarSubscriber = self.create_subscription(LaserScan, topic3, self.SensorCallbackLidar, 10)
-
-        self.period = 0.05
-        self.timer = self.create_timer(self.period, self.ControlFunction)
-
-        self.goal_reached = False
-
-
-    def orientationError(self, theta_, thetad_):
-        e = thetad_ - theta_
-        return math.atan2(math.sin(e), math.cos(e))
-
-
-    def SensorCallbackPose(self, msg):
-        self.OdometryMsg = msg
-
-
-    def SensorCallbackLidar(self, msg):
-        self.LidarMsg = msg
-
-
-    def ControlFunction(self):
-
-        if self.goal_reached:
-            self.controlVel.linear.x = 0.0
-            self.controlVel.angular.z = 0.0
-            self.controlPublisher.publish(self.controlVel)
+    def lidar_callback(self, scan):
+        if self.done:
             return
 
-        # --- Pose ---
-        x = self.OdometryMsg.pose.pose.position.x
-        y = self.OdometryMsg.pose.pose.position.y
-        q = self.OdometryMsg.pose.pose.orientation
-        roll, pitch, yaw = quat2euler([q.w, q.x, q.y, q.z])
-        theta = yaw
+        if self.front_idx is None:
+            self.compute_indices(scan)
 
-        # --- Distance to goal ---
-        vectorD = np.array([[self.xdp - x], [self.ydp - y]])
-        dist = np.linalg.norm(vectorD)
+        cmd = Twist()
 
-        if dist < self.eps_control:
-            self.goal_reached = True
-            print(f"Goal reached at ({x:.3f}, {y:.3f})")
+        ranges = np.array(scan.ranges)
+        ranges = np.where(np.isfinite(ranges), ranges, 12.0)
+
+        def w(idx):
+            return np.min(ranges[max(0, idx - 10): min(len(ranges), idx + 10)])
+
+        front = w(self.front_idx)
+        left = w(self.left_idx)
+        right = w(self.right_idx)
+
+        # Debug prints
+        self.get_logger().info(
+            f"front={front:.2f} left={left:.2f} right={right:.2f}  |  LocalPos X={self.X:.3f}, Y={self.Y:.3f}"
+        )
+
+        # --------------------------------------------------------
+        # Turning 90 degrees
+        # --------------------------------------------------------
+        if self.turning_90:
+            cmd.angular.z = -1.0  # rotate CW
+
+            if self.yaw is not None:
+                angle_turned = abs(self.normalize(self.yaw - self.turn_start_yaw))
+                if angle_turned >= math.pi/2:
+                    self.get_logger().info("90-degree turn complete.")
+                    cmd.angular.z = 0.0
+                    self.done = True
+                    self.cmd_pub.publish(cmd)
+                    return
+
+            self.cmd_pub.publish(cmd)
             return
 
-        # --- Emergency Stop ---
-        if hasattr(self.LidarMsg, 'ranges') and len(self.LidarMsg.ranges) > 0:
-            clean_ranges = np.array(self.LidarMsg.ranges)
-            clean_ranges = clean_ranges[np.isfinite(clean_ranges)]
+        # --------------------------------------------------------
+        # Detect corner → begin 90-degree turn
+        # --------------------------------------------------------
+        if front < 0.6:
+            # Print clean coordinate: X should remain ~0, Y is forward distance
+            self.get_logger().info(
+                f"Backing start point → X={self.X:.3f}, Y={self.Y:.3f}"
+            )
 
-            if len(clean_ranges) > 0 and np.min(clean_ranges) < 0.25:
-                self.controlVel.linear.x = 0.0
-                self.controlVel.angular.z = 0.0
-                self.controlPublisher.publish(self.controlVel)
-                print("EMERGENCY STOP")
-                return
+            self.get_logger().info("Corner detected. Starting 90-degree turn.")
+            self.turning_90 = True
+            self.turn_start_yaw = self.yaw
+            return
 
+        # --------------------------------------------------------
+        # Normal wall-following movement
+        # --------------------------------------------------------
+        desired = 0.5
 
-        # --- Attractive Force ---
-        AF = self.kap * vectorD
-
-        # --- Repulsive Force ---
-        RF = np.zeros((2,1))
-        near = False
-
-        if hasattr(self.LidarMsg, 'ranges'):
-
-            ranges = np.array(self.LidarMsg.ranges)
-            valid = np.where(np.isfinite(ranges))[0]
-
-            for i in valid:
-                r = ranges[i]
-
-                if 0.1 < r < self.gstarp:
-                    near = True
-
-                    ang = self.LidarMsg.angle_min + i * self.LidarMsg.angle_increment + theta
-
-                    obs = np.array([[x + r * np.cos(ang)],
-                                    [y + r * np.sin(ang)]])
-                    diff = np.array([[x - obs[0,0]],
-                                     [y - obs[1,0]]])
-
-                    norm = np.linalg.norm(diff)
-                    if norm == 0:
-                        continue
-
-                    pr = self.krp * ((1/r) - (1/self.gstarp)) / r
-                    radial = diff / norm
-                    tang = np.array([[-radial[1,0]], [radial[0,0]]])
-
-                    RF += pr * (radial + 0.6 * tang)
-
-        # Reduce attraction when obstacles nearby
-        if near:
-            AF *= 0.4
-
-
-        # --- Wall Repulsion ---
-        L = 10.0
-        g = 1.5
-        k = 6.0
-        gradUw = np.zeros((2,1))
-
-        if x < -L + g:
-            gradUw += np.array([[k], [0]])
-        if x > L - g:
-            gradUw += np.array([[-k], [0]])
-        if y < -L + g:
-            gradUw += np.array([[0], [k]])
-        if y > L - g:
-            gradUw += np.array([[0], [-k]])
-
-        if dist < 1.0:
-            gradUw *= 0.0
-
-
-        # --- Total Force ---
-        F = AF + RF + gradUw
-        # Deadlock escape boost
-        if near and np.linalg.norm(RF) > np.linalg.norm(AF):
-            F += 0.3 * np.array([[-np.sin(theta)], [np.cos(theta)]])
-
-
-        # --- Normalize force ---
-        maxF = 2.0
-        normF = np.linalg.norm(F)
-        if normF > maxF:
-            F = (F / normF) * maxF
-
-
-        # --- Heading ---
-        thetaD = math.atan2(F[1,0], F[0,0])
-        e = self.orientationError(theta, thetaD)
-
-
-        # --- Velocity Control ---
-        if abs(e) > self.eps_orient:
-            v = 0.0
-            w = self.kthetap * e
+        if left > desired + 0.1:
+            cmd.linear.x = 0.3
+            cmd.angular.z = +0.5
+        elif left < desired - 0.1:
+            cmd.linear.x = 0.3
+            cmd.angular.z = -0.5
         else:
-            v = np.linalg.norm(F)
-            w = self.kthetap * e
+            cmd.linear.x = 0.5
+            cmd.angular.z = 0.0
 
-            # Smooth slowdown near goal
-            if dist < 1.0:
-                v = 0.5 + 0.5 * dist
+        self.cmd_pub.publish(cmd)
 
-
-
-        # --- Publish ---
-        self.controlVel.linear.x = float(v)
-        self.controlVel.angular.z = float(w)
-        self.controlPublisher.publish(self.controlVel)
-
-        print(f"x={x:.2f} y={y:.2f} θ={theta:.2f} dist={dist:.2f} v={v:.2f} ω={w:.2f}")
-
+    def normalize(self, a):
+        return math.atan2(math.sin(a), math.cos(a))
 
 
 def main(args=None):
-
     rclpy.init(args=args)
-
-    # --- Better TUNING ---
-    xd = 7.0
-    yd = 7.0
-
-    kap = 0.25
-    krp = 1.5
-    ktheta = 2.5
-    gstarp = 2.0
-    eps_orient = math.pi / 20
-    eps_control = 0.05
-
-    node = ControllerNode(xd, yd, kap, krp, ktheta, gstarp, eps_orient, eps_control)
+    node = WallFollower()
     rclpy.spin(node)
-
     node.destroy_node()
     rclpy.shutdown()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

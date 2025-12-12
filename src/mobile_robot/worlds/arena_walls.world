@@ -4,9 +4,7 @@
 
     <!-- Disable skybox, force white background -->
     <scene>
-      <sky>
-        <box>0</box>
-      </sky>
+      
       <background>1 1 1 1</background>
       <ambient>1 1 1 1</ambient>
     </scene>
