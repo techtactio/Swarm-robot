@@ -1,115 +1,62 @@
 <?xml version="1.0" ?>
 <sdf version="1.7">
   <world name="default">
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"></plugin>
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"></plugin>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"></plugin>
 
-    <!-- Disable skybox, force white background -->
     <scene>
-      
       <background>1 1 1 1</background>
       <ambient>1 1 1 1</ambient>
+      <grid>true</grid>
     </scene>
 
-    <!-- Bright directional light -->
     <light type="directional" name="sun">
-      <cast_shadows>false</cast_shadows>
-      <pose>0 0 20 0 0 0</pose>
-      <diffuse>1 1 1 1</diffuse>
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
       <specular>0.2 0.2 0.2 1</specular>
-      <direction>-0.4 0.4 -1</direction>
+      <direction>-0.5 0.1 -0.9</direction>
     </light>
 
-    <!-- Pure white ground -->
     <model name="ground_plane">
       <static>true</static>
       <link name="link">
         <collision name="collision">
-          <geometry>
-            <plane>
-              <normal>0 0 1</normal>
-              <size>200 200</size>
-            </plane>
-          </geometry>
+          <geometry><plane><normal>0 0 1</normal><size>200 200</size></plane></geometry>
         </collision>
         <visual name="visual">
-          <geometry>
-            <plane>
-              <normal>0 0 1</normal>
-              <size>200 200</size>
-            </plane>
-          </geometry>
-          <material>
-            <ambient>1 1 1 1</ambient>
-            <diffuse>1 1 1 1</diffuse>
-          </material>
+          <geometry><plane><normal>0 0 1</normal><size>200 200</size></plane></geometry>
+          <material><ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse></material>
         </visual>
       </link>
     </model>
 
-    <!-- BLACK walls -->
     <model name="arena_walls">
       <static>true</static>
-
-      <!-- Left Wall -->
       <link name="left_wall">
-        <collision name="collision">
-          <geometry><box><size>0.2 20 2</size></box></geometry>
-        </collision>
-        <visual name="visual">
-          <geometry><box><size>0.2 20 2</size></box></geometry>
-          <material>
-            <ambient>0 0 0 1</ambient>
-            <diffuse>0 0 0 1</diffuse>
-          </material>
-        </visual>
+        <visual name="v"><geometry><box><size>0.2 20 2</size></box></geometry><material><ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse></material></visual>
+        <collision name="c"><geometry><box><size>0.2 20 2</size></box></geometry></collision>
         <pose>-10 0 1 0 0 0</pose>
       </link>
-
-      <!-- Right Wall -->
       <link name="right_wall">
-        <collision name="collision">
-          <geometry><box><size>0.2 20 2</size></box></geometry>
-        </collision>
-        <visual name="visual">
-          <geometry><box><size>0.2 20 2</size></box></geometry>
-          <material>
-            <ambient>0 0 0 1</ambient>
-            <diffuse>0 0 0 1</diffuse>
-          </material>
-        </visual>
+        <visual name="v"><geometry><box><size>0.2 20 2</size></box></geometry><material><ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse></material></visual>
+        <collision name="c"><geometry><box><size>0.2 20 2</size></box></geometry></collision>
         <pose>10 0 1 0 0 0</pose>
       </link>
-
-      <!-- Back Wall -->
       <link name="back_wall">
-        <collision name="collision">
-          <geometry><box><size>20 0.2 2</size></box></geometry>
-        </collision>
-        <visual name="visual">
-          <geometry><box><size>20 0.2 2</size></box></geometry>
-          <material>
-            <ambient>0 0 0 1</ambient>
-            <diffuse>0 0 0 1</diffuse>
-          </material>
-        </visual>
+        <visual name="v"><geometry><box><size>20 0.2 2</size></box></geometry><material><ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse></material></visual>
+        <collision name="c"><geometry><box><size>20 0.2 2</size></box></geometry></collision>
         <pose>0 -10 1 0 0 0</pose>
       </link>
-
-      <!-- Front Wall -->
       <link name="front_wall">
-        <collision name="collision">
-          <geometry><box><size>20 0.2 2</size></box></geometry>
-        </collision>
-        <visual name="visual">
-          <geometry><box><size>20 0.2 2</size></box></geometry>
-          <material>
-            <ambient>0 0 0 1</ambient>
-            <diffuse>0 0 0 1</diffuse>
-          </material>
-        </visual>
+        <visual name="v"><geometry><box><size>20 0.2 2</size></box></geometry><material><ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse></material></visual>
+        <collision name="c"><geometry><box><size>20 0.2 2</size></box></geometry></collision>
         <pose>0 10 1 0 0 0</pose>
       </link>
-
     </model>
-
   </world>
 </sdf>

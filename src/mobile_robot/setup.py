@@ -37,7 +37,8 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'controller_final = mobile_robot.controller_final:main',
+            'y_tracker_controller = mobile_robot.y_tracker_controller:main',
+            'x_tracker_controller = mobile_robot.x_tracker_controller:main',
         ],
     },
 )
