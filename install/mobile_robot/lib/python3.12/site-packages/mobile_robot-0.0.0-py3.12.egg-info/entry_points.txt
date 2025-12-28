@@ -1,3 +1,4 @@
 [console_scripts]
+partition_manager = mobile_robot.partition_manager:main
 x_tracker_controller = mobile_robot.x_tracker_controller:main
 y_tracker_controller = mobile_robot.y_tracker_controller:main

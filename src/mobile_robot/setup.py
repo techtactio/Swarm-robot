@@ -39,6 +39,7 @@ setup(
         'console_scripts': [
             'y_tracker_controller = mobile_robot.y_tracker_controller:main',
             'x_tracker_controller = mobile_robot.x_tracker_controller:main',
+            'partition_manager = mobile_robot.partition_manager:main',
         ],
     },
 )
