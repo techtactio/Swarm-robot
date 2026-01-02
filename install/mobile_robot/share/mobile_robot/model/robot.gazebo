@@ -10,14 +10,18 @@
   </gazebo>
 
   <gazebo reference="${robot_name}/wheel1_link">
-    <mu1>1.0</mu1>
-    <mu2>1.0</mu2>
+    <mu1>2.0</mu1>
+    <mu2>2.0</mu2>
+    <kp>10000000.0</kp> 
+    <kd>1.0</kd>
     <material>Gazebo/Black</material>
   </gazebo>
 
   <gazebo reference="${robot_name}/wheel2_link">
-    <mu1>1.0</mu1>
-    <mu2>1.0</mu2>
+    <mu1>2.0</mu1>
+    <mu2>2.0</mu2>
+    <kp>10000000.0</kp> 
+    <kd>1.0</kd>
     <material>Gazebo/Black</material>
   </gazebo>
 
@@ -37,7 +41,7 @@
     <plugin filename="gz-sim-diff-drive-system" name="gz::sim::systems::DiffDrive">
       <right_joint>${wheel1_joint}</right_joint>
       <left_joint>${wheel2_joint}</left_joint>
-      <wheel_separation>${2*s4}</wheel_separation>
+      <wheel_separation>0.915</wheel_separation>
       <wheel_diameter>${2*r}</wheel_diameter>
       <max_linear_acceleration>0.5</max_linear_acceleration>
       <min_linear_acceleration>-0.5</min_linear_acceleration>

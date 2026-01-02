@@ -16,9 +16,9 @@
   <xacro:property name="s3" value="${2*r}"/>
   <xacro:property name="s4" value="${c/2+d/2}"/>
 
-  <xacro:property name="d1" value="100.0"/>
-  <xacro:property name="d2" value="100.0"/>
-  <xacro:property name="d3" value="100.0"/>
+  <xacro:property name="d1" value="10.0"/>
+  <xacro:property name="d2" value="10.0"/>
+  <xacro:property name="d3" value="10.0"/>
   
   <xacro:property name="m1" value="${d1*a*b*c}"/>
   <xacro:property name="m2" value="${d2*pi_const*r*r*d}"/>
