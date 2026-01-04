@@ -10,18 +10,16 @@
   </gazebo>
 
   <gazebo reference="${robot_name}/wheel1_link">
-    <mu1>2.0</mu1>
-    <mu2>2.0</mu2>
+    <mu1>200.0</mu1>  <mu2>200.0</mu2>
     <kp>10000000.0</kp> 
-    <kd>1.0</kd>
+    <kd>100.0</kd> <minDepth>0.001</minDepth> <maxVel>0.0</maxVel>
     <material>Gazebo/Black</material>
   </gazebo>
 
   <gazebo reference="${robot_name}/wheel2_link">
-    <mu1>2.0</mu1>
-    <mu2>2.0</mu2>
+    <mu1>200.0</mu1>  <mu2>200.0</mu2>
     <kp>10000000.0</kp> 
-    <kd>1.0</kd>
+    <kd>100.0</kd> <minDepth>0.001</minDepth> <maxVel>0.0</maxVel>
     <material>Gazebo/Black</material>
   </gazebo>
 
@@ -41,10 +39,10 @@
     <plugin filename="gz-sim-diff-drive-system" name="gz::sim::systems::DiffDrive">
       <right_joint>${wheel1_joint}</right_joint>
       <left_joint>${wheel2_joint}</left_joint>
-      <wheel_separation>0.915</wheel_separation>
+      <wheel_separation>0.7</wheel_separation>
       <wheel_diameter>${2*r}</wheel_diameter>
-      <max_linear_acceleration>0.5</max_linear_acceleration>
-      <min_linear_acceleration>-0.5</min_linear_acceleration>
+      <max_linear_acceleration>1.0</max_linear_acceleration>
+      <min_linear_acceleration>-1.0</min_linear_acceleration>
       <topic>/${robot_name}/cmd_vel</topic>
       <tf_topic>/${robot_name}/tf</tf_topic>
       <odom_topic>/${robot_name}/odom</odom_topic>
@@ -86,15 +84,22 @@
       <visualize>1</visualize>
     </sensor>
   </gazebo>
-
+  <!-- <gazebo reference="${robot_name}/body_link">
+    <sensor name="${robot_name}_imu" type="imu">
+      <always_on>1</always_on>
+      <update_rate>100</update_rate>
+      <visualize>true</visualize>
+      <topic>${robot_name}/imu</topic>
+      <frame_id>${robot_name}/body_link</frame_id> </sensor>
+  </gazebo> -->
   <gazebo>
     <plugin filename="gz-sim-odometry-publisher-system" name="gz::sim::systems::OdometryPublisher">
-      <odom_frame>odom</odom_frame>
+      <odom_frame>odom1</odom_frame>
       <robot_base_frame>${robot_name}/base_footprint</robot_base_frame>
       <odom_publish_frequency>50</odom_publish_frequency>
       <odom_topic>/${robot_name}/odom1</odom_topic>
       <odom_covariance_topic>/${robot_name}/odom1_with_covariance</odom_covariance_topic>
-      <tf_topic>odom1_tf</tf_topic>
+      <tf_topic>/${robot_name}/odom1_tf</tf_topic>
     </plugin>
   </gazebo>
 

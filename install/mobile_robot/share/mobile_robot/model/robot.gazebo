@@ -1,1 +1,108 @@
-/home/adharsh/Desktop/Swarm-robot/build/mobile_robot/model/robot.gazebo
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+<xacro:macro name="gazebo_config" params="robot_name wheel1_joint wheel2_joint r s4">
+
+  <gazebo reference="${robot_name}/body_link">
+    <mu1>0.8</mu1>
+    <mu2>0.8</mu2>
+    <material>Gazebo/Red</material>
+  </gazebo>
+
+  <gazebo reference="${robot_name}/wheel1_link">
+    <mu1>200.0</mu1>  <mu2>200.0</mu2>
+    <kp>10000000.0</kp> 
+    <kd>100.0</kd> <minDepth>0.001</minDepth> <maxVel>0.0</maxVel>
+    <material>Gazebo/Black</material>
+  </gazebo>
+
+  <gazebo reference="${robot_name}/wheel2_link">
+    <mu1>200.0</mu1>  <mu2>200.0</mu2>
+    <kp>10000000.0</kp> 
+    <kd>100.0</kd> <minDepth>0.001</minDepth> <maxVel>0.0</maxVel>
+    <material>Gazebo/Black</material>
+  </gazebo>
+
+  <gazebo reference="${robot_name}/caster_link">
+    <mu1>0.0001</mu1>
+    <mu2>0.0001</mu2>
+    <material>Gazebo/Blue</material>
+  </gazebo>
+
+  <gazebo reference="${robot_name}/slope_link">
+    <mu1>0.3</mu1>
+    <mu2>0.3</mu2>
+    <material>Gazebo/Yellow</material>
+  </gazebo>
+
+  <gazebo>
+    <plugin filename="gz-sim-diff-drive-system" name="gz::sim::systems::DiffDrive">
+      <right_joint>${wheel1_joint}</right_joint>
+      <left_joint>${wheel2_joint}</left_joint>
+      <wheel_separation>0.7</wheel_separation>
+      <wheel_diameter>${2*r}</wheel_diameter>
+      <max_linear_acceleration>1.0</max_linear_acceleration>
+      <min_linear_acceleration>-1.0</min_linear_acceleration>
+      <topic>/${robot_name}/cmd_vel</topic>
+      <tf_topic>/${robot_name}/tf</tf_topic>
+      <odom_topic>/${robot_name}/odom</odom_topic>
+      <frame_id>odom</frame_id>
+      <child_frame_id>${robot_name}/base_footprint</child_frame_id>
+      <odom_publisher_frequency>30</odom_publisher_frequency>
+    </plugin>
+  </gazebo>
+
+  <gazebo>
+    <plugin filename="gz-sim-joint-state-publisher-system" name="gz::sim::systems::JointStatePublisher">
+      <topic>/${robot_name}/joint_states</topic>
+      <joint_name>${wheel1_joint}</joint_name>
+      <joint_name>${wheel2_joint}</joint_name>
+    </plugin>
+  </gazebo>
+
+  <gazebo reference="${robot_name}/lidar_link">
+    <sensor name="${robot_name}_lidar" type="gpu_lidar">
+      <pose relative_to="${robot_name}/lidar_link">0 0 0.08 0 0 0</pose>
+      <topic>/${robot_name}/scan</topic>
+      <update_rate>10</update_rate>
+      <lidar>
+        <scan>
+          <horizontal>
+            <samples>720</samples>
+            <resolution>1</resolution>
+            <min_angle>-3.14</min_angle>
+            <max_angle>3.14</max_angle>
+          </horizontal>
+        </scan>
+        <range>
+          <min>0.05</min>
+          <max>12.0</max>
+          <resolution>0.005</resolution>
+        </range>
+      </lidar>
+      <always_on>1</always_on>
+      <visualize>1</visualize>
+    </sensor>
+  </gazebo>
+  <!-- <gazebo reference="${robot_name}/body_link">
+    <sensor name="${robot_name}_imu" type="imu">
+      <always_on>1</always_on>
+      <update_rate>100</update_rate>
+      <visualize>true</visualize>
+      <topic>${robot_name}/imu</topic>
+      <frame_id>${robot_name}/body_link</frame_id> </sensor>
+  </gazebo> -->
+  <gazebo>
+    <plugin filename="gz-sim-odometry-publisher-system" name="gz::sim::systems::OdometryPublisher">
+      <odom_frame>odom1</odom_frame>
+      <robot_base_frame>${robot_name}/base_footprint</robot_base_frame>
+      <odom_publish_frequency>50</odom_publish_frequency>
+      <odom_topic>/${robot_name}/odom1</odom_topic>
+      <odom_covariance_topic>/${robot_name}/odom1_with_covariance</odom_covariance_topic>
+      <tf_topic>/${robot_name}/odom1_tf</tf_topic>
+    </plugin>
+  </gazebo>
+
+</xacro:macro>
+
+</robot>

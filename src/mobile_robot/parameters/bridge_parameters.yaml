@@ -39,10 +39,16 @@
 
 # Odometry (odom1 from odometry publisher)
 - ros_topic_name: "/robot1/odom1"
-  gz_topic_name: "/robot1/odom"
+  gz_topic_name: "/robot1/odom1"
   ros_type_name: "nav_msgs/msg/Odometry"
   gz_type_name: "gz.msgs.Odometry"
   direction: GZ_TO_ROS
+
+# - ros_topic_name: "/robot1/imu"
+#   gz_topic_name: "/robot1/imu"
+#   ros_type_name: "sensor_msgs/msg/Imu"
+#   gz_type_name: "gz.msgs.IMU"
+#   direction: GZ_TO_ROS
 
 # ===============================================
 # Robot 2 (robot2) Topics
@@ -78,7 +84,13 @@
 
 # Odometry (odom1 from odometry publisher)
 - ros_topic_name: "/robot2/odom1"
-  gz_topic_name: "/robot2/odom"
+  gz_topic_name: "/robot2/odom1"
   ros_type_name: "nav_msgs/msg/Odometry"
   gz_type_name: "gz.msgs.Odometry"
   direction: GZ_TO_ROS
+
+# - ros_topic_name: "/robot2/imu"
+#   gz_topic_name: "/robot2/imu"
+#   ros_type_name: "sensor_msgs/msg/Imu"
+#   gz_type_name: "gz.msgs.IMU"
+#   direction: GZ_TO_ROS

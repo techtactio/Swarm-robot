@@ -1,1 +1,96 @@
-/home/adharsh/Desktop/Swarm-robot/build/mobile_robot/parameters/bridge_parameters.yaml
+# Clock and Generic Topics (remain the same)
+- ros_topic_name: "clock"
+  gz_topic_name: "clock"
+  ros_type_name: "rosgraph_msgs/msg/Clock"
+  gz_type_name: "gz.msgs.Clock"
+  direction: GZ_TO_ROS
+
+# ===============================================
+# Robot 1 (robot1) Topics
+# ===============================================
+
+# JointState
+- ros_topic_name: "/robot1/joint_states"
+  gz_topic_name: "/robot1/joint_states"
+  ros_type_name: "sensor_msgs/msg/JointState"
+  gz_type_name: "gz.msgs.Model"
+  direction: GZ_TO_ROS
+
+# Odometry (odom from diff drive)
+- ros_topic_name: "/robot1/odom"
+  gz_topic_name: "/robot1/odom"
+  ros_type_name: "nav_msgs/msg/Odometry"
+  gz_type_name: "gz.msgs.Odometry"
+  direction: GZ_TO_ROS
+
+# Lidar Scan
+- ros_topic_name: "/robot1/scan"
+  gz_topic_name: "/robot1/scan"
+  ros_type_name: "sensor_msgs/msg/LaserScan"
+  gz_type_name: "gz.msgs.LaserScan"
+  direction: GZ_TO_ROS
+
+# Command Velocity
+- ros_topic_name: "/robot1/cmd_vel"
+  gz_topic_name: "/robot1/cmd_vel"
+  ros_type_name: "geometry_msgs/msg/Twist"
+  gz_type_name: "gz.msgs.Twist"
+  direction: ROS_TO_GZ
+
+# Odometry (odom1 from odometry publisher)
+- ros_topic_name: "/robot1/odom1"
+  gz_topic_name: "/robot1/odom1"
+  ros_type_name: "nav_msgs/msg/Odometry"
+  gz_type_name: "gz.msgs.Odometry"
+  direction: GZ_TO_ROS
+
+# - ros_topic_name: "/robot1/imu"
+#   gz_topic_name: "/robot1/imu"
+#   ros_type_name: "sensor_msgs/msg/Imu"
+#   gz_type_name: "gz.msgs.IMU"
+#   direction: GZ_TO_ROS
+
+# ===============================================
+# Robot 2 (robot2) Topics
+# ===============================================
+
+# JointState
+- ros_topic_name: "/robot2/joint_states"
+  gz_topic_name: "/robot2/joint_states"
+  ros_type_name: "sensor_msgs/msg/JointState"
+  gz_type_name: "gz.msgs.Model"
+  direction: GZ_TO_ROS
+
+# Odometry (odom from diff drive)
+- ros_topic_name: "/robot2/odom"
+  gz_topic_name: "/robot2/odom"
+  ros_type_name: "nav_msgs/msg/Odometry"
+  gz_type_name: "gz.msgs.Odometry"
+  direction: GZ_TO_ROS
+
+# Lidar Scan
+- ros_topic_name: "/robot2/scan"
+  gz_topic_name: "/robot2/scan"
+  ros_type_name: "sensor_msgs/msg/LaserScan"
+  gz_type_name: "gz.msgs.LaserScan"
+  direction: GZ_TO_ROS
+
+# Command Velocity
+- ros_topic_name: "/robot2/cmd_vel"
+  gz_topic_name: "/robot2/cmd_vel"
+  ros_type_name: "geometry_msgs/msg/Twist"
+  gz_type_name: "gz.msgs.Twist"
+  direction: ROS_TO_GZ
+
+# Odometry (odom1 from odometry publisher)
+- ros_topic_name: "/robot2/odom1"
+  gz_topic_name: "/robot2/odom1"
+  ros_type_name: "nav_msgs/msg/Odometry"
+  gz_type_name: "gz.msgs.Odometry"
+  direction: GZ_TO_ROS
+
+# - ros_topic_name: "/robot2/imu"
+#   gz_topic_name: "/robot2/imu"
+#   ros_type_name: "sensor_msgs/msg/Imu"
+#   gz_type_name: "gz.msgs.IMU"
+#   direction: GZ_TO_ROS

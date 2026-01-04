@@ -14,11 +14,11 @@
   <xacro:property name="s1" value="${b/2+r}"/>
   <xacro:property name="s2" value="${2*r}"/>
   <xacro:property name="s3" value="${2*r}"/>
-  <xacro:property name="s4" value="${c/2+d/2}"/>
+  <xacro:property name="s4" value="${c/2+d/2+0.02}"/>
 
-  <xacro:property name="d1" value="10.0"/>
-  <xacro:property name="d2" value="10.0"/>
-  <xacro:property name="d3" value="10.0"/>
+  <xacro:property name="d1" value="200.0"/>
+  <xacro:property name="d2" value="500.0"/>
+  <xacro:property name="d3" value="200.0"/>
   
   <xacro:property name="m1" value="${d1*a*b*c}"/>
   <xacro:property name="m2" value="${d2*pi_const*r*r*d}"/>
@@ -71,8 +71,8 @@
         <origin rpy="0 0 0" xyz="0 0 0"/>
     </visual>
     <collision>
-        <geometry><box size="${a} ${c} ${b}"/></geometry>
-        <origin rpy="0 0 0" xyz="0 0 0"/>
+        <geometry><box size="${a} ${c} ${b- 0.05}"/></geometry>
+        <origin rpy="0 0 0" xyz="0 0 0.025"/>
     </collision>
     <xacro:inertia_body />
   </link>
@@ -98,14 +98,14 @@
     <xacro:inertia_wheel />
   </link>
 
-  <gazebo reference="${robot_name}/wheel1_link">
+  <!-- <gazebo reference="${robot_name}/wheel1_link">
     <mu1>1.0</mu1>
     <mu2>1.0</mu2>
     <kp>1000000.0</kp> 
     <kd>100.0</kd>
     <minDepth>0.001</minDepth>
     <maxVel>1.0</maxVel>
-  </gazebo>
+  </gazebo> -->
 
   <joint name="${robot_name}/wheel2_joint" type="continuous">
     <parent link="${robot_name}/body_link"/>
@@ -128,14 +128,14 @@
     <xacro:inertia_wheel />
   </link>
 
-  <gazebo reference="${robot_name}/wheel2_link">
+  <!-- <gazebo reference="${robot_name}/wheel2_link">
     <mu1>1.0</mu1>
     <mu2>1.0</mu2>
     <kp>1000000.0</kp> 
     <kd>100.0</kd>
     <minDepth>0.001</minDepth>
     <maxVel>1.0</maxVel>
-  </gazebo>
+  </gazebo> -->
 
   <joint name="${robot_name}/caster_joint" type="continuous">
     <parent link="${robot_name}/body_link"/>
@@ -156,11 +156,11 @@
     <xacro:inertia_caster />
   </link>
   
-  <gazebo reference="${robot_name}/caster_link">
+  <!-- <gazebo reference="${robot_name}/caster_link">
     <mu1>0.0</mu1>
     <mu2>0.0</mu2>
     <material>Gazebo/Red</material>
-  </gazebo>
+  </gazebo> -->
 
   <joint name="${robot_name}/slope_joint" type="fixed">
     <parent link="${robot_name}/body_link"/>
@@ -178,11 +178,11 @@
     </collision>
   </link>
   
-  <gazebo reference="${robot_name}/slope_link">
+  <!-- <gazebo reference="${robot_name}/slope_link">
     <mu1>0.0</mu1>
     <mu2>0.0</mu2>
   </gazebo>
-  
+   -->
   <joint name="${robot_name}/lidar_joint" type="fixed">
     <origin xyz="0 0 0" rpy="0 0 0"/>
     <parent link="${robot_name}/body_link"/>

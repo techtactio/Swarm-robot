@@ -44,7 +44,7 @@ def generate_launch_description():
             '-topic', 'robot1/robot_description',
             '-x', '-9.4',   # Changed from -9.4
             '-y', '9.4',   # Changed from 9.4
-            '-z', '0.2',   # Drop from height to prevent stuck wheels
+            '-z', '0.00',   # Drop from height to prevent stuck wheels
             '-Y', '0.0' # Face +Y
         ],
         output='screen',
@@ -58,7 +58,7 @@ def generate_launch_description():
             '-topic', 'robot2/robot_description',
             '-x', '-9.4',  # Start back a bit
             '-y', '8.4',  # Away from Robot 1
-            '-z', '0.2',
+            '-z', '0.00',
             '-Y', '-1.57'  # Face +X (So X-Tracker works)
         ],
         output='screen',
