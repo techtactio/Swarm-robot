@@ -115,9 +115,14 @@ class XAxisTrackerAndCleaner(Node):
 
         correction = K_YAW * yaw_err
 
-        if abs(target_yaw - math.pi/2) < 0.1: correction -= K_POS * pos_err
-        elif abs(target_yaw) > 3.0: correction += K_POS * pos_err
-        elif abs(target_yaw - math.pi) < 0.1 or abs(target_yaw + math.pi) < 0.1: correction -= K_POS * pos_err
+        # --- FIXES APPLIED BELOW ---
+        if abs(target_yaw - math.pi/2) < 0.1: 
+            correction -= K_POS * pos_err
+        elif abs(target_yaw) > 3.0: 
+            correction -= K_POS * pos_err  # CHANGED FROM += TO -=
+        elif abs(target_yaw - math.pi) < 0.1 or abs(target_yaw + math.pi) < 0.1: 
+            correction -= K_POS * pos_err
+        # ---------------------------
         
         cmd.angular.z = max(-0.5, min(0.5, correction))
         self.cmd_pub.publish(cmd)
@@ -134,7 +139,7 @@ class XAxisTrackerAndCleaner(Node):
                 msg = Float32(); msg.data = float(self.map_length); self.dim_pub.publish(msg)
                 self.stop_robot(); self.state = "BACKING_AFTER_MEASURE"; return
             right = ranges[self.right_idx]
-            cmd = Twist(); error = 0.5 - right; cmd.linear.x = 0.4; cmd.angular.z = 1.5 * error; self.cmd_pub.publish(cmd)
+            cmd = Twist(); error = 0.5 - right; cmd.linear.x = 0.5; cmd.angular.z = 1.5 * error; self.cmd_pub.publish(cmd)
 
         elif self.state == "BACKING_AFTER_MEASURE":
             if self.move_backward(1.0): self.state = "WAITING"
@@ -144,39 +149,69 @@ class XAxisTrackerAndCleaner(Node):
 
         elif self.state == "CLEANING":
             if self.clean_step == 0:
+                # Turn UP
                 if self.turn_in_place(math.pi/2): self.clean_step = 1
             elif self.clean_step == 1:
+                # Move UP (Lock X)
                 if self.fixed_axis_value == 0.0: self.fixed_axis_value = self.current_x
-                if self.current_y < (self.map_width - 0.5) and self.current_front_dist > 0.6: self.move_straight_locked(math.pi/2, 'x', self.fixed_axis_value)
-                else: self.fixed_axis_value = 0.0; self.clean_step = 2
+                if self.current_y < (self.map_width - 0.5) and self.current_front_dist > 0.6: 
+                    self.move_straight_locked(math.pi/2, 'x', self.fixed_axis_value)
+                else: 
+                    self.fixed_axis_value = 0.0 # Reset here just to be safe
+                    self.clean_step = 2
             elif self.clean_step == 2:
+                # Back up
                 if self.move_backward(1.0): self.clean_step = 3
             elif self.clean_step == 3:
+                # Turn LEFT (facing PI)
                 if self.turn_in_place(math.pi): self.clean_step = 4
             elif self.clean_step == 4:
+                # Move LEFT (Lock Y)
                 if self.step_start_pos == 0.0: self.fixed_axis_value = self.current_y; self.step_start_pos = self.current_x
                 if self.current_x <= self.partition_min_x: self.stop_robot(); return
-                if abs(self.current_x - self.step_start_pos) < 2.0: self.move_straight_locked(math.pi, 'y', self.fixed_axis_value)
-                else: self.step_start_pos = 0.0; self.clean_step = 5
+                
+                if abs(self.current_x - self.step_start_pos) < 2.0: 
+                    self.move_straight_locked(math.pi, 'y', self.fixed_axis_value)
+                else: 
+                    # --- FIX 1: Reset fixed_axis_value ---
+                    self.step_start_pos = 0.0
+                    self.fixed_axis_value = 0.0 
+                    self.clean_step = 5
+                    
             elif self.clean_step == 5:
                 if self.wait_in_place(2.0): self.clean_step = 6
             elif self.clean_step == 6:
+                # Turn DOWN
                 if self.turn_in_place(-math.pi/2): self.clean_step = 7
+                
             elif self.clean_step == 7:
+                # Move DOWN (Lock X)
                 if self.fixed_axis_value == 0.0: self.fixed_axis_value = self.current_x
-                if self.current_y > 0.5 and self.current_front_dist > 0.6: self.move_straight_locked(-math.pi/2, 'x', self.fixed_axis_value)
-                else: self.fixed_axis_value = 0.0; self.clean_step = 8
+                if self.current_y > 0.5 and self.current_front_dist > 0.6: 
+                    self.move_straight_locked(-math.pi/2, 'x', self.fixed_axis_value)
+                else: 
+                    self.fixed_axis_value = 0.0; self.clean_step = 8
             elif self.clean_step == 8:
                 if self.move_backward(1.0): self.clean_step = 9
             elif self.clean_step == 9:
+                # Turn LEFT (facing PI)
                 if self.turn_in_place(math.pi): self.clean_step = 10
             elif self.clean_step == 10:
+                 # Move LEFT (Lock Y)
                  if self.step_start_pos == 0.0: self.fixed_axis_value = self.current_y; self.step_start_pos = self.current_x
                  if self.current_x <= self.partition_min_x: self.stop_robot(); return
-                 if abs(self.current_x - self.step_start_pos) < 2.0: self.move_straight_locked(math.pi, 'y', self.fixed_axis_value)
-                 else: self.step_start_pos = 0.0; self.clean_step = 11
+                 
+                 if abs(self.current_x - self.step_start_pos) < 2.0: 
+                     self.move_straight_locked(math.pi, 'y', self.fixed_axis_value)
+                 else: 
+                     # --- FIX 2: Reset fixed_axis_value ---
+                     self.step_start_pos = 0.0
+                     self.fixed_axis_value = 0.0 
+                     self.clean_step = 11
+                     
             elif self.clean_step == 11:
                 if self.wait_in_place(2.0): self.clean_step = 0
+            
 
     def check_start_cleaning(self):
         if self.state == "WAITING" and self.map_width is not None and self.map_length is not None:
