@@ -4,7 +4,7 @@ from rclpy.qos import qos_profile_sensor_data
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import Odometry
-from std_msgs.msg import Float32
+from std_msgs.msg import Float32,Int32
 import numpy as np
 import math
 
@@ -18,6 +18,16 @@ class YAxisTrackerAndCleaner(Node):
         
         self.scan_sub = self.create_subscription(LaserScan, '/robot1/scan', self.lidar_callback, qos_profile_sensor_data)
         self.odom_sub = self.create_subscription(Odometry, '/robot1/odom1', self.odom_callback, qos_profile_sensor_data)
+
+        # === NEW SUBSCRIPTION ===
+        self.robot_count_sub = self.create_subscription(
+            Int32, 
+            '/swarm_count', 
+            self.robot_count_callback, 
+            10
+        )
+
+        self.robot_count = 1  # Default to 1 if no other robots found
 
         self.state = "MEASURING"
         self.map_width = None
@@ -39,6 +49,19 @@ class YAxisTrackerAndCleaner(Node):
         self.left_idx = None
 
         self.get_logger().info("Robot 1 Ready: Measuring Width...")
+
+    # === NEW CALLBACK ===
+    def robot_count_callback(self, msg):
+        # Always take the largest count seen (prevent errors if a robot disconnects)
+        if msg.data > self.robot_count:
+            self.robot_count = msg.data
+            self.get_logger().info(f"Updated Swarm Size: {self.robot_count} robots")
+            
+            # If we are already waiting, re-calculate the partition immediately
+            if self.state == "WAITING" and self.map_length is not None:
+                self.check_start_cleaning()
+
+    
 
     def length_callback(self, msg):
         self.map_length = msg.data
@@ -258,9 +281,16 @@ class YAxisTrackerAndCleaner(Node):
 
     def check_start_cleaning(self):
         if self.state == "WAITING" and self.map_length is not None:
+            # We delay slightly to ensure we've discovered everyone, 
+            # but if you are running 'robot_chat' they discover each other very fast.
+            
             self.state = "CLEANING"
-            self.partition_max_x = self.map_length / 2.0
-            self.get_logger().info(f"R1 Partition: X [0 -> {self.partition_max_x:.2f}]")
+            
+            # === DYNAMIC PARTITIONING ===
+            # Instead of dividing by 2.0, we divide by self.robot_count
+            self.partition_max_x = self.map_length / float(self.robot_count)
+            
+            self.get_logger().info(f"R1 Partition: X [0 -> {self.partition_max_x:.2f}] (Split by {self.robot_count})")
 
     def stop_robot(self):
         self.cmd_pub.publish(Twist())

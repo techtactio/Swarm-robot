@@ -5,7 +5,7 @@ from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
-
+from launch.actions import IncludeLaunchDescription, TimerAction # <--- Add TimerAction
 def generate_launch_description():
     namePackage = 'mobile_robot'
     
@@ -14,6 +14,7 @@ def generate_launch_description():
     
     robot1_xacro_path = os.path.join(model_dir, 'robot1.xacro')
     robot2_xacro_path = os.path.join(model_dir, 'robot2.xacro')
+    # robot3_xacro_path = os.path.join(model_dir, 'robot2.xacro')
 
     def process_xacro_with_name(robot_name, xacro_file_path):
         command = ['xacro', xacro_file_path, f'robot_name:={robot_name}']
@@ -64,6 +65,8 @@ def generate_launch_description():
         output='screen',
     )
 
+    
+
     nodeRobotStatePublisher1 = Node(
         package='robot_state_publisher', executable='robot_state_publisher',
         namespace='robot1', output='screen',
@@ -77,6 +80,7 @@ def generate_launch_description():
         parameters=[{'robot_description': robot2_description, 'use_sim_time': True}],
         remappings=[('/tf', 'tf'), ('/tf_static', 'tf_static')]
     )
+    
 
     bridge_params = os.path.join(get_package_share_directory(namePackage), 'parameters', 'bridge_parameters.yaml')
     start_gazebo_ros_bridge_cmd = Node(
@@ -85,9 +89,63 @@ def generate_launch_description():
         output='screen',
     )
 
+    # === ROBOT COMMUNICATION NODES ===
+    
+    # Chat Node for Robot 1
+    chatNode1 = Node(
+        package=namePackage, # 'mobile_robot'
+        executable='robot_chat',
+        namespace='robot1',
+        output='screen'
+    )
+
+    # Chat Node for Robot 2
+    chatNode2 = Node(
+        package=namePackage, # 'mobile_robot'
+        executable='robot_chat',
+        namespace='robot2',
+        output='screen'
+    )
+    # #=====for Robot 3 ========
+    # spawnModelNodeGazebo3 = Node(
+    #     package='ros_gz_sim', executable='create',
+    #     arguments=[
+    #         '-name', 'robot3',
+    #         '-topic', 'robot3/robot_description',
+    #         '-x', '-9.4',  # Start back a bit
+    #         '-y', '7.4',  # Away from Robot 1
+    #         '-z', '0.00',
+    #         '-Y', '-1.57'  # Face +X (So X-Tracker works)
+    #     ],
+    #     output='screen',
+    # )
+    # nodeRobotStatePublisher3= Node(
+    #     package='robot_state_publisher', executable='robot_state_publisher',
+    #     namespace='robot3', output='screen',
+    #     parameters=[{'robot_description': robot2_description, 'use_sim_time': True}],
+    #     remappings=[('/tf', 'tf'), ('/tf_static', 'tf_static')]
+    # )
+    # chatNode3 = Node(
+    #     package=namePackage, # 'mobile_robot'
+    #     executable='robot_chat',
+    #     namespace='robot3',
+    #     output='screen'
+    # )
+    # delayed_robot3_spawn = TimerAction(
+    #     period=30.0,
+    #     actions=[
+    #         spawnModelNodeGazebo3,
+    #         nodeRobotStatePublisher3,
+    #         chatNode3
+    #     ]
+    # )
+
     return LaunchDescription([
         gazeboLaunch,
-        nodeRobotStatePublisher1, spawnModelNodeGazebo1,
-        nodeRobotStatePublisher2, spawnModelNodeGazebo2,
+        nodeRobotStatePublisher1, spawnModelNodeGazebo1, chatNode1,
+        nodeRobotStatePublisher2, spawnModelNodeGazebo2, chatNode2,
+        
+        #for robot 3
+        # delayed_robot3_spawn,
         start_gazebo_ros_bridge_cmd
     ])

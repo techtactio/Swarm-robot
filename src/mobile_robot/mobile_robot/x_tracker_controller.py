@@ -4,7 +4,7 @@ from rclpy.qos import qos_profile_sensor_data
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import Odometry
-from std_msgs.msg import Float32
+from std_msgs.msg import Float32, Int32  # 1. Import Int32
 import numpy as np
 import math
 
@@ -19,6 +19,15 @@ class XAxisTrackerAndCleaner(Node):
         
         self.scan_sub = self.create_subscription(LaserScan, '/robot2/scan', self.lidar_callback, qos_profile_sensor_data)
         self.odom_sub = self.create_subscription(Odometry, '/robot2/odom1', self.odom_callback, qos_profile_sensor_data)
+
+        # 2. NEW: Subscription for Swarm Count
+        self.robot_count_sub = self.create_subscription(
+            Int32, 
+            '/swarm_count', 
+            self.robot_count_callback, 
+            10
+        )
+        self.robot_count = 1  # Default value
 
         self.state = "MEASURING"
         self.map_length = None
@@ -39,6 +48,16 @@ class XAxisTrackerAndCleaner(Node):
         self.front_idx = None
         self.right_idx = None
         self.get_logger().info("Robot 2 Ready: Measuring Length...")
+
+    # 3. NEW: Callback to update robot count
+    def robot_count_callback(self, msg):
+        if msg.data > self.robot_count:
+            self.robot_count = msg.data
+            self.get_logger().info(f"Updated Swarm Size: {self.robot_count} robots")
+            
+            # Recalculate partition if we are waiting
+            if self.state == "WAITING" and self.map_length is not None:
+                self.check_start_cleaning()
 
     def width_callback(self, msg):
         self.map_width = msg.data
@@ -115,14 +134,12 @@ class XAxisTrackerAndCleaner(Node):
 
         correction = K_YAW * yaw_err
 
-        # --- FIXES APPLIED BELOW ---
         if abs(target_yaw - math.pi/2) < 0.1: 
             correction -= K_POS * pos_err
         elif abs(target_yaw) > 3.0: 
-            correction -= K_POS * pos_err  # CHANGED FROM += TO -=
+            correction -= K_POS * pos_err
         elif abs(target_yaw - math.pi) < 0.1 or abs(target_yaw + math.pi) < 0.1: 
             correction -= K_POS * pos_err
-        # ---------------------------
         
         cmd.angular.z = max(-0.5, min(0.5, correction))
         self.cmd_pub.publish(cmd)
@@ -149,31 +166,27 @@ class XAxisTrackerAndCleaner(Node):
 
         elif self.state == "CLEANING":
             if self.clean_step == 0:
-                # Turn UP
                 if self.turn_in_place(math.pi/2): self.clean_step = 1
             elif self.clean_step == 1:
-                # Move UP (Lock X)
                 if self.fixed_axis_value == 0.0: self.fixed_axis_value = self.current_x
                 if self.current_y < (self.map_width - 0.5) and self.current_front_dist > 0.6: 
                     self.move_straight_locked(math.pi/2, 'x', self.fixed_axis_value)
                 else: 
-                    self.fixed_axis_value = 0.0 # Reset here just to be safe
+                    self.fixed_axis_value = 0.0
                     self.clean_step = 2
             elif self.clean_step == 2:
-                # Back up
                 if self.move_backward(1.0): self.clean_step = 3
             elif self.clean_step == 3:
-                # Turn LEFT (facing PI)
                 if self.turn_in_place(math.pi): self.clean_step = 4
             elif self.clean_step == 4:
-                # Move LEFT (Lock Y)
                 if self.step_start_pos == 0.0: self.fixed_axis_value = self.current_y; self.step_start_pos = self.current_x
+                
+                # --- CHECK PARTITION BOUNDARY ---
                 if self.current_x <= self.partition_min_x: self.stop_robot(); return
                 
                 if abs(self.current_x - self.step_start_pos) < 2.0: 
                     self.move_straight_locked(math.pi, 'y', self.fixed_axis_value)
                 else: 
-                    # --- FIX 1: Reset fixed_axis_value ---
                     self.step_start_pos = 0.0
                     self.fixed_axis_value = 0.0 
                     self.clean_step = 5
@@ -181,11 +194,9 @@ class XAxisTrackerAndCleaner(Node):
             elif self.clean_step == 5:
                 if self.wait_in_place(2.0): self.clean_step = 6
             elif self.clean_step == 6:
-                # Turn DOWN
                 if self.turn_in_place(-math.pi/2): self.clean_step = 7
                 
             elif self.clean_step == 7:
-                # Move DOWN (Lock X)
                 if self.fixed_axis_value == 0.0: self.fixed_axis_value = self.current_x
                 if self.current_y > 0.5 and self.current_front_dist > 0.6: 
                     self.move_straight_locked(-math.pi/2, 'x', self.fixed_axis_value)
@@ -194,17 +205,16 @@ class XAxisTrackerAndCleaner(Node):
             elif self.clean_step == 8:
                 if self.move_backward(1.0): self.clean_step = 9
             elif self.clean_step == 9:
-                # Turn LEFT (facing PI)
                 if self.turn_in_place(math.pi): self.clean_step = 10
             elif self.clean_step == 10:
-                 # Move LEFT (Lock Y)
                  if self.step_start_pos == 0.0: self.fixed_axis_value = self.current_y; self.step_start_pos = self.current_x
+                 
+                 # --- CHECK PARTITION BOUNDARY ---
                  if self.current_x <= self.partition_min_x: self.stop_robot(); return
                  
                  if abs(self.current_x - self.step_start_pos) < 2.0: 
                      self.move_straight_locked(math.pi, 'y', self.fixed_axis_value)
                  else: 
-                     # --- FIX 2: Reset fixed_axis_value ---
                      self.step_start_pos = 0.0
                      self.fixed_axis_value = 0.0 
                      self.clean_step = 11
@@ -213,11 +223,16 @@ class XAxisTrackerAndCleaner(Node):
                 if self.wait_in_place(2.0): self.clean_step = 0
             
 
+    # 4. UPDATED: Partition Logic
     def check_start_cleaning(self):
         if self.state == "WAITING" and self.map_width is not None and self.map_length is not None:
             self.state = "CLEANING"
-            self.partition_min_x = self.map_length / 2.0
-            self.get_logger().info(f"R2 Partition: X [{self.partition_min_x:.2f} -> {self.map_length:.2f}]")
+            
+            # Divide length by number of robots
+            # Robot 2 will clean everything "above" the first partition
+            self.partition_min_x = self.map_length / float(self.robot_count)
+            
+            self.get_logger().info(f"R2 Partition: X [{self.partition_min_x:.2f} -> {self.map_length:.2f}] (Split by {self.robot_count})")
         elif self.state == "WAITING":
             pass
 
