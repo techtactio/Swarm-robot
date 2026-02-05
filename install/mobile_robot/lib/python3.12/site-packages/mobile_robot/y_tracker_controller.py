@@ -4,7 +4,7 @@ from rclpy.qos import qos_profile_sensor_data
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import Odometry
-from std_msgs.msg import Float32,Int32
+from std_msgs.msg import Float32, Int32
 import numpy as np
 import math
 
@@ -12,56 +12,61 @@ class YAxisTrackerAndCleaner(Node):
     def __init__(self):
         super().__init__('y_axis_tracker')
 
+        self.OFFSET_MEASURE = 0.6
+        self.OFFSET_CLEAN   = 0.6
+        self.SAFETY_MARGIN  = 0.5 
+        
+        # INCREASED MERGE DISTANCE to prevent multiple detections of same object
+        self.WASTE_DETECT_RANGE = 2.0      
+        self.WASTE_MERGE_DIST = 0.8         
+        self.WASTE_ANGLE_WINDOW = math.radians(30) 
+
         self.cmd_pub = self.create_publisher(Twist, '/robot1/cmd_vel', 10)
         self.dim_pub = self.create_publisher(Float32, '/map/width', 10)
         self.length_sub = self.create_subscription(Float32, '/map/length', self.length_callback, 10)
-        
         self.scan_sub = self.create_subscription(LaserScan, '/robot1/scan', self.lidar_callback, qos_profile_sensor_data)
         self.odom_sub = self.create_subscription(Odometry, '/robot1/odom1', self.odom_callback, qos_profile_sensor_data)
-
-        # === NEW SUBSCRIPTION ===
-        self.robot_count_sub = self.create_subscription(
-            Int32, 
-            '/swarm_count', 
-            self.robot_count_callback, 
-            10
-        )
-
-        self.robot_count = 1  # Default to 1 if no other robots found
+        self.robot_count_sub = self.create_subscription(Int32, '/swarm_count', self.robot_count_callback, 10)
+        self.robot_count = 1 
 
         self.state = "MEASURING"
         self.map_width = None
         self.map_length = None
         
+        # Coords
         self.start_x, self.start_y, self.start_yaw = None, None, None
-        self.current_x, self.current_y, self.current_yaw = 0.0, 0.0, 0.0
+        self.current_x = -self.OFFSET_CLEAN 
+        self.current_y = self.OFFSET_MEASURE
+        self.current_yaw = 0.0
+        self.world_x = 0.0
+        self.world_y = 0.0
+        self.world_yaw = 0.0
         
+        # Logic
         self.clean_step = 0
         self.fixed_axis_value = 0.0
         self.step_start_pos = 0.0
-        self.partition_max_x = 0.0
-        
-        # Helper vars
+        self.partition_max_x = 100.0 # Default until updated
         self.backup_start_pos = None
         self.wait_start_time = None
-
         self.front_idx = None
         self.left_idx = None
+        self.current_front_dist = 10.0 
+        
+        self.is_turning = False
+        self.approaching_waste = False
+        self.current_waste_distance = None
+        self.detected_wastes = [] 
 
         self.get_logger().info("Robot 1 Ready: Measuring Width...")
 
-    # === NEW CALLBACK ===
     def robot_count_callback(self, msg):
-        # Always take the largest count seen (prevent errors if a robot disconnects)
         if msg.data > self.robot_count:
             self.robot_count = msg.data
-            self.get_logger().info(f"Updated Swarm Size: {self.robot_count} robots")
-            
-            # If we are already waiting, re-calculate the partition immediately
-            if self.state == "WAITING" and self.map_length is not None:
-                self.check_start_cleaning()
-
-    
+            # Recalculate partition
+            if self.map_length is not None:
+                self.partition_max_x = self.map_length / float(self.robot_count)
+                self.get_logger().info(f"R1 Partition Update: Limit = {self.partition_max_x:.2f}")
 
     def length_callback(self, msg):
         self.map_length = msg.data
@@ -73,16 +78,20 @@ class YAxisTrackerAndCleaner(Node):
         cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z)
         yaw = math.atan2(siny_cosp, cosy_cosp)
 
+        self.world_x = msg.pose.pose.position.x
+        self.world_y = msg.pose.pose.position.y
+        self.world_yaw = yaw
+
         if self.start_x is None:
-            self.start_x = msg.pose.pose.position.x
-            self.start_y = msg.pose.pose.position.y
+            self.start_x = self.world_x
+            self.start_y = self.world_y
             self.start_yaw = yaw
 
-        dx = msg.pose.pose.position.x - self.start_x
-        dy = msg.pose.pose.position.y - self.start_y
+        dx = self.world_x - self.start_x
+        dy = self.world_y - self.start_y
 
-        self.current_y = dx * math.cos(self.start_yaw) + dy * math.sin(self.start_yaw)
-        self.current_x = -dx * math.sin(self.start_yaw) + dy * math.cos(self.start_yaw)
+        self.current_y = (dx * math.cos(self.start_yaw) + dy * math.sin(self.start_yaw)) + self.OFFSET_MEASURE
+        self.current_x = (-dx * math.sin(self.start_yaw) + dy * math.cos(self.start_yaw)) - self.OFFSET_CLEAN
         self.current_yaw = yaw - self.start_yaw
 
     def compute_indices(self, scan):
@@ -92,213 +101,177 @@ class YAxisTrackerAndCleaner(Node):
         self.front_idx = max(0, min(len(scan.ranges)-1, a2i(0.0)))
         self.left_idx = max(0, min(len(scan.ranges)-1, a2i(math.pi/2)))
 
-    # --- CONTROLLERS ---
     def turn_in_place(self, target_yaw):
         cmd = Twist()
-        cmd.linear.x = 0.0
         cyaw = math.atan2(math.sin(self.current_yaw), math.cos(self.current_yaw))
         diff = target_yaw - cyaw
         diff = math.atan2(math.sin(diff), math.cos(diff))
-
-        if abs(diff) > 0.02:
-            kp = 1.5
-            speed = kp * diff
-            if speed > 0: speed = max(0.1, min(0.5, speed))
-            else: speed = min(-0.1, max(-0.5, speed))
-            cmd.angular.z = speed
-            self.cmd_pub.publish(cmd)
-            return False
+        if abs(diff) > 0.05:
+            self.is_turning = True
+            cmd.angular.z = max(-0.5, min(0.5, 1.5 * diff))
+            self.cmd_pub.publish(cmd); return False
         else:
-            self.cmd_pub.publish(Twist())
-            return True
+            self.is_turning = False; self.cmd_pub.publish(Twist()); return True
 
     def move_backward(self, distance):
-        if self.backup_start_pos is None:
-            self.backup_start_pos = (self.current_x, self.current_y)
-            return False
-        dx = self.current_x - self.backup_start_pos[0]
-        dy = self.current_y - self.backup_start_pos[1]
-        dist_moved = math.sqrt(dx*dx + dy*dy)
+        if self.backup_start_pos is None: self.backup_start_pos = (self.current_x, self.current_y); return False
+        dx = self.current_x - self.backup_start_pos[0]; dy = self.current_y - self.backup_start_pos[1]
+        if math.sqrt(dx*dx + dy*dy) < distance: cmd = Twist(); cmd.linear.x = -0.2; self.cmd_pub.publish(cmd); return False
+        else: self.cmd_pub.publish(Twist()); self.backup_start_pos = None; return True
 
-        if dist_moved < distance:
-            cmd = Twist()
-            cmd.linear.x = -0.2
-            self.cmd_pub.publish(cmd)
-            return False
-        else:
-            self.cmd_pub.publish(Twist())
-            self.backup_start_pos = None
-            return True
-
-    # --- NEW HELPER: WAIT ---
     def wait_in_place(self, duration):
-        """Stops the robot for 'duration' seconds."""
-        if self.wait_start_time is None:
-            self.wait_start_time = self.get_clock().now()
-            self.cmd_pub.publish(Twist()) # Force Stop
-            return False
-        
-        # Calculate elapsed time in seconds
-        elapsed = (self.get_clock().now() - self.wait_start_time).nanoseconds / 1e9
-        
-        if elapsed < duration:
-            self.cmd_pub.publish(Twist()) # Maintain Stop
-            return False
-        else:
-            self.wait_start_time = None # Reset
-            return True
+        if self.wait_start_time is None: self.wait_start_time = self.get_clock().now(); self.cmd_pub.publish(Twist()); return False
+        if (self.get_clock().now() - self.wait_start_time).nanoseconds / 1e9 < duration: self.cmd_pub.publish(Twist()); return False
+        self.wait_start_time = None; return True
 
     def move_straight_locked(self, target_yaw, axis_to_hold, target_val):
-        cmd = Twist()
-        cmd.linear.x = 0.4
+        cmd = Twist(); cmd.linear.x = 0.5
         cyaw = math.atan2(math.sin(self.current_yaw), math.cos(self.current_yaw))
-        yaw_err = target_yaw - cyaw
-        yaw_err = math.atan2(math.sin(yaw_err), math.cos(yaw_err))
-
+        yaw_err = math.atan2(math.sin(target_yaw - cyaw), math.cos(target_yaw - cyaw))
         pos_err = 0.0
         if axis_to_hold == 'x': pos_err = target_val - self.current_x
         elif axis_to_hold == 'y': pos_err = target_val - self.current_y
-
+        
         K_YAW = 2.0; K_POS = 1.0
+        if self.current_front_dist < 0.8: K_POS = 0.0
         correction = K_YAW * yaw_err
-
+        
         if abs(target_yaw - 0.0) < 0.1: correction += K_POS * pos_err
         elif abs(target_yaw - math.pi) < 0.1 or abs(target_yaw + math.pi) < 0.1: correction -= K_POS * pos_err
         elif abs(target_yaw + math.pi/2) < 0.1: correction += K_POS * pos_err
         elif abs(target_yaw - math.pi/2) < 0.1: correction -= K_POS * pos_err
-
+        
         cmd.angular.z = max(-0.5, min(0.5, correction))
         self.cmd_pub.publish(cmd)
+
+    def trigger_rotation_phase(self):
+        self.stop_robot(); self.get_logger().info("Partition Reached. Returning/Stopping.")
+        self.state = "FINISHED"
 
     def lidar_callback(self, scan):
         if self.front_idx is None: self.compute_indices(scan)
         ranges = np.array(scan.ranges)
         ranges = np.where(np.isfinite(ranges), ranges, 12.0)
-        front_dist = ranges[self.front_idx]
+        self.current_front_dist = ranges[self.front_idx]
 
-        # --- MEASURING ---
         if self.state == "MEASURING":
-            if front_dist < 0.6:
-                self.map_width = abs(self.current_y) + front_dist
+            if self.current_front_dist < 0.6:
+                self.map_width = abs(self.current_y) + self.current_front_dist + 0.10
                 msg = Float32(); msg.data = float(self.map_width); self.dim_pub.publish(msg)
-                self.stop_robot()
-                self.state = "BACKING_AFTER_MEASURE"
-                self.get_logger().info(f"Width: {self.map_width:.2f}. Backing up...")
+                self.stop_robot(); self.state = "BACKING_AFTER_MEASURE"
+                self.get_logger().info(f"Width: {self.map_width:.2f}")
                 return
-            left = ranges[self.left_idx]
-            cmd = Twist()
-            error = 0.5 - left
-            cmd.linear.x = 0.4
-            cmd.angular.z = -1.5 * error
-            self.cmd_pub.publish(cmd)
+            left = ranges[self.left_idx]; cmd = Twist(); error = 0.5 - left
+            cmd.linear.x = 0.4; cmd.angular.z = -1.5 * error; self.cmd_pub.publish(cmd)
 
         elif self.state == "BACKING_AFTER_MEASURE":
-            if self.move_backward(1.0):
-                self.state = "WAITING"
-                self.get_logger().info("Backup Done. Waiting...")
+            if self.move_backward(1.0): self.state = "WAITING"
 
         elif self.state == "WAITING":
             self.check_start_cleaning()
 
-        # --- CLEANING LOOP ---
         elif self.state == "CLEANING":
-            
-            # 0. Turn East (Start)
-            if self.clean_step == 0:
-                if self.turn_in_place(-math.pi/2):
-                    self.fixed_axis_value = self.current_y; self.step_start_pos = self.current_x; self.clean_step = 1
+            if self.approaching_waste:
+                self.current_waste_distance = self.current_front_dist
+                if self.current_waste_distance > 0.45:
+                    cmd = Twist(); cmd.linear.x = 0.2; self.cmd_pub.publish(cmd)
+                else:
+                    self.get_logger().info("WASTE REMOVED/COLLECTED")
+                    if self.detected_wastes:
+                        # Only removing from local memory for now
+                        self.detected_wastes.pop() 
+                    self.approaching_waste = False; self.current_waste_distance = None; self.stop_robot()
+                return
 
-            # 1. Move East
-            elif self.clean_step == 1:
-                if abs(self.current_x) >= self.partition_max_x: self.stop_robot(); return
+            if not self.is_turning: self.scan_for_waste(scan, ranges)
+            self.run_cleaning_fsm()
+
+    def scan_for_waste(self, scan, ranges):
+        half_window = int(self.WASTE_ANGLE_WINDOW / scan.angle_increment)
+        start = max(0, self.front_idx - half_window)
+        end   = min(len(ranges), self.front_idx + half_window)
+        
+        for i in range(start, end):
+            dist = ranges[i]
+            if not math.isfinite(dist): continue
+            
+            if 0.3 < dist < self.WASTE_DETECT_RANGE:
+                angle = scan.angle_min + i * scan.angle_increment
                 
-                if abs(self.current_x - self.step_start_pos) < 2.0:
-                    self.move_straight_locked(-math.pi/2, 'y', self.fixed_axis_value)
-                else:
-                    # DONE moving East. Next is Turn South.
-                    # INSERT STOP HERE.
-                    self.clean_step = 2 
+                # --- GLOBAL COORDS ---
+                global_angle = self.world_yaw + angle
+                w_world_x = self.world_x + dist * math.cos(global_angle)
+                w_world_y = self.world_y + dist * math.sin(global_angle)
+                
+                # === PARTITION CHECK (CRITICAL FIX) ===
+                # If waste X is GREATER than my limit, it belongs to Robot 2. IGNORE IT.
+                # Adding 0.2m buffer to allow overlap slightly if needed, or strict.
+                if w_world_x > (self.partition_max_x + 0.2):
+                    continue 
 
-            # 2. STOP (Before Turning South)
-            elif self.clean_step == 2:
-                if self.wait_in_place(2.0): # Wait 2 seconds
-                    self.clean_step = 3
+                # === TRIGGER APPROACH ===
+                if abs(angle) < math.radians(5):
+                    self.approaching_waste = True
+                    self.current_waste_distance = dist
+                
+                # === DUPLICATE CHECK ===
+                is_new = True
+                for (ex, ey) in self.detected_wastes:
+                    # Using increased merge dist (0.8)
+                    if math.hypot(w_world_x - ex, w_world_y - ey) < self.WASTE_MERGE_DIST:
+                        is_new = False
+                        break
+                
+                if is_new:
+                    rounded = (round(w_world_x, 2), round(w_world_y, 2))
+                    self.detected_wastes.append(rounded)
+                    self.get_logger().info(f"NEW GLOBAL WASTE: {rounded}")
+                
+                break 
 
-            # 3. Turn South (PI)
-            elif self.clean_step == 3:
-                if self.turn_in_place(math.pi):
-                    self.fixed_axis_value = self.current_x; self.clean_step = 4
-
-            # 4. Move South
-            elif self.clean_step == 4:
-                if self.current_y > 0.5 and front_dist > 0.6:
-                    self.move_straight_locked(math.pi, 'x', self.fixed_axis_value)
-                else:
-                    self.clean_step = 5
-
-            # 5. BACK UP (After South)
-            elif self.clean_step == 5:
-                if self.move_backward(1.0):
-                    self.clean_step = 6
-
-            # 6. Turn East
-            elif self.clean_step == 6:
-                if self.turn_in_place(-math.pi/2):
-                    self.fixed_axis_value = self.current_y; self.step_start_pos = self.current_x; self.clean_step = 7
-
-            # 7. Move East
-            elif self.clean_step == 7:
-                if abs(self.current_x) >= self.partition_max_x: self.stop_robot(); return
-
-                if abs(self.current_x - self.step_start_pos) < 2.0:
-                    self.move_straight_locked(-math.pi/2, 'y', self.fixed_axis_value)
-                else:
-                    # DONE Moving East. Next is Turn North.
-                    # INSERT STOP HERE.
-                    self.clean_step = 8
-
-            # 8. STOP (Before Turning North)
-            elif self.clean_step == 8:
-                if self.wait_in_place(2.0):
-                    self.clean_step = 9
-
-            # 9. Turn North (0.0)
-            elif self.clean_step == 9:
-                if self.turn_in_place(0.0):
-                    self.fixed_axis_value = self.current_x; self.clean_step = 10
-
-            # 10. Move North
-            elif self.clean_step == 10:
-                if self.current_y < (self.map_width - 0.5) and front_dist > 0.6:
-                    self.move_straight_locked(0.0, 'x', self.fixed_axis_value)
-                else:
-                    self.clean_step = 11
-            
-            # 11. BACK UP (After North)
-            elif self.clean_step == 11:
-                if self.move_backward(1.0):
-                    self.clean_step = 0 # Loop back
+    def run_cleaning_fsm(self):
+        if self.clean_step == 0:
+            if self.turn_in_place(-math.pi/2): self.fixed_axis_value = self.current_y; self.step_start_pos = self.current_x; self.clean_step = 1
+        elif self.clean_step == 1:
+            if abs(self.current_x) >= (self.partition_max_x - self.SAFETY_MARGIN): self.trigger_rotation_phase(); return 
+            if abs(self.current_x - self.step_start_pos) < 2.0: self.move_straight_locked(-math.pi/2, 'y', self.fixed_axis_value)
+            else: self.clean_step = 2 
+        elif self.clean_step == 2:
+            if self.wait_in_place(2.0): self.clean_step = 3
+        elif self.clean_step == 3:
+            if self.turn_in_place(math.pi): self.fixed_axis_value = self.current_x; self.clean_step = 4
+        elif self.clean_step == 4:
+            if self.current_y > 0.5 and self.current_front_dist > 0.6: self.move_straight_locked(math.pi, 'x', self.fixed_axis_value)
+            else: self.clean_step = 5
+        elif self.clean_step == 5:
+            if self.move_backward(1.0): self.clean_step = 6
+        elif self.clean_step == 6:
+            if self.turn_in_place(-math.pi/2): self.fixed_axis_value = self.current_y; self.step_start_pos = self.current_x; self.clean_step = 7
+        elif self.clean_step == 7:
+            if abs(self.current_x) >= (self.partition_max_x - self.SAFETY_MARGIN): self.trigger_rotation_phase(); return 
+            if abs(self.current_x - self.step_start_pos) < 2.0: self.move_straight_locked(-math.pi/2, 'y', self.fixed_axis_value)
+            else: self.clean_step = 8
+        elif self.clean_step == 8:
+            if self.wait_in_place(2.0): self.clean_step = 9
+        elif self.clean_step == 9:
+            if self.turn_in_place(0.0): self.fixed_axis_value = self.current_x; self.clean_step = 10
+        elif self.clean_step == 10:
+            if self.current_y < (self.map_width - 0.5) and self.current_front_dist > 0.6: self.move_straight_locked(0.0, 'x', self.fixed_axis_value)
+            else: self.clean_step = 11
+        elif self.clean_step == 11:
+            if self.move_backward(1.0): self.clean_step = 0 
 
     def check_start_cleaning(self):
         if self.state == "WAITING" and self.map_length is not None:
-            # We delay slightly to ensure we've discovered everyone, 
-            # but if you are running 'robot_chat' they discover each other very fast.
-            
             self.state = "CLEANING"
-            
-            # === DYNAMIC PARTITIONING ===
-            # Instead of dividing by 2.0, we divide by self.robot_count
             self.partition_max_x = self.map_length / float(self.robot_count)
-            
-            self.get_logger().info(f"R1 Partition: X [0 -> {self.partition_max_x:.2f}] (Split by {self.robot_count})")
+            self.get_logger().info(f"R1 Partition: X [0 -> {self.partition_max_x:.2f}]")
 
-    def stop_robot(self):
-        self.cmd_pub.publish(Twist())
+    def stop_robot(self): self.cmd_pub.publish(Twist())
 
 def main(args=None):
     rclpy.init(args=args)
     rclpy.spin(YAxisTrackerAndCleaner())
     rclpy.shutdown()
 
-if __name__ == '__main__':
-    main()
+if __name__ == '__main__': main()
