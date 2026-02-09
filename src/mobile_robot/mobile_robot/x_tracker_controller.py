@@ -15,6 +15,12 @@ class XAxisTrackerAndCleaner(Node):
         self.OFFSET_MEASURE = 0.6 
         self.OFFSET_CLEAN   = 1.6
 
+        # === WASTE DETECTION CONFIG ===
+        self.WASTE_DETECT_RANGE = 3.0      # Reduced to 3.0m to minimize far-wall noise
+        self.WASTE_MERGE_DIST = 0.8        
+        self.WASTE_ANGLE_WINDOW = math.radians(40)
+        # ==============================
+
         self.cmd_pub = self.create_publisher(Twist, '/robot2/cmd_vel', 10)
         self.dim_pub = self.create_publisher(Float32, '/map/length', 10)
         self.width_sub = self.create_subscription(Float32, '/map/width', self.width_callback, 10)
@@ -25,21 +31,13 @@ class XAxisTrackerAndCleaner(Node):
         self.robot_count_sub = self.create_subscription(Int32, '/swarm_count', self.robot_count_callback, 10)
         self.robot_count = 1 
 
-        # --- WASTE COLLECTION DATA ---
-        # Coordinates must be inside Robot 2's zone (Partition to End)
-        # Assuming Partition around X=10 to X=20
-        self.waste_list = [
-            {'x': 12.0, 'y': 2.0},
-            {'x': 15.0, 'y': 5.0},
-            {'x': 18.0, 'y': 3.0}
-        ]
-        # -----------------------------
-
         self.state = "MEASURING"
         self.map_length = None
         self.map_width = None
         
         self.start_x, self.start_y, self.start_yaw = None, None, None
+        self.world_x, self.world_y, self.world_yaw = 0.0, 0.0, 0.0
+
         self.current_x = self.OFFSET_MEASURE
         self.current_y = self.OFFSET_CLEAN
         self.current_yaw = 0.0
@@ -55,6 +53,11 @@ class XAxisTrackerAndCleaner(Node):
         
         self.front_idx = None
         self.right_idx = None
+
+        self.approaching_waste = False
+        self.current_waste_distance = None
+        self.detected_wastes = [] 
+
         self.get_logger().info("Robot 2 Ready: Measuring Length...")
 
     def robot_count_callback(self, msg):
@@ -73,12 +76,18 @@ class XAxisTrackerAndCleaner(Node):
         siny_cosp = 2 * (q.w * q.z + q.x * q.y)
         cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z)
         yaw = math.atan2(siny_cosp, cosy_cosp)
+        
+        self.world_x = msg.pose.pose.position.x
+        self.world_y = msg.pose.pose.position.y
+        self.world_yaw = yaw
+
         if self.start_x is None:
-            self.start_x = msg.pose.pose.position.x
-            self.start_y = msg.pose.pose.position.y
+            self.start_x = self.world_x
+            self.start_y = self.world_y
             self.start_yaw = yaw
-        dx = msg.pose.pose.position.x - self.start_x
-        dy = msg.pose.pose.position.y - self.start_y
+        
+        dx = self.world_x - self.start_x
+        dy = self.world_y - self.start_y
 
         self.current_x = (dx * math.cos(self.start_yaw) + dy * math.sin(self.start_yaw)) + self.OFFSET_MEASURE
         self.current_y = (-dx * math.sin(self.start_yaw) + dy * math.cos(self.start_yaw)) + self.OFFSET_CLEAN
@@ -118,33 +127,21 @@ class XAxisTrackerAndCleaner(Node):
         dy = self.current_y - self.backup_start_pos[1]
         dist_moved = math.sqrt(dx*dx + dy*dy)
         if dist_moved < distance:
-            cmd = Twist()
-            cmd.linear.x = -0.2
-            self.cmd_pub.publish(cmd)
-            return False
+            cmd = Twist(); cmd.linear.x = -0.2; self.cmd_pub.publish(cmd); return False
         else:
-            self.cmd_pub.publish(Twist())
-            self.backup_start_pos = None
-            return True
+            self.cmd_pub.publish(Twist()); self.backup_start_pos = None; return True
 
     def wait_in_place(self, duration):
         if self.wait_start_time is None:
             self.wait_start_time = self.get_clock().now()
-            self.cmd_pub.publish(Twist())
-            return False
+            self.cmd_pub.publish(Twist()); return False
         elapsed = (self.get_clock().now() - self.wait_start_time).nanoseconds / 1e9
-        if elapsed < duration:
-            self.cmd_pub.publish(Twist())
-            return False
-        else:
-            self.wait_start_time = None
-            return True
+        if elapsed < duration: self.cmd_pub.publish(Twist()); return False
+        else: self.wait_start_time = None; return True
 
     def move_straight_locked(self, target_yaw, axis_to_hold, target_val):
-        cmd = Twist()
-        cmd.linear.x = 0.4
+        cmd = Twist(); cmd.linear.x = 0.4
         cyaw = math.atan2(math.sin(self.current_yaw), math.cos(self.current_yaw))
-        
         yaw_err = target_yaw - cyaw
         yaw_err = math.atan2(math.sin(yaw_err), math.cos(yaw_err))
 
@@ -163,43 +160,66 @@ class XAxisTrackerAndCleaner(Node):
         cmd.angular.z = max(-0.5, min(0.5, correction))
         self.cmd_pub.publish(cmd)
 
-    def navigate_to_waste(self):
-        """Standard P-Controller to drive to a coordinate"""
-        if not self.waste_list:
-            #self.get_logger().info("MISSION ACCOMPLISHED: All waste collected!")
-            self.stop_robot()
-            return
+    def scan_for_waste(self, scan, ranges):
+        if self.map_length is None: return 
 
-        target = self.waste_list[0] # Look at first item
+        half_window = int(self.WASTE_ANGLE_WINDOW / scan.angle_increment)
+        start = max(0, self.front_idx - half_window)
+        end   = min(len(ranges), self.front_idx + half_window)
         
-        dx = target['x'] - self.current_x
-        dy = target['y'] - self.current_y
-        dist = math.sqrt(dx*dx + dy*dy)
-        target_angle = math.atan2(dy, dx)
+        # === CALCULATE GLOBAL BOUNDARIES FOR ROBOT 2 ===
+        # Robot 2 Zone: From (Start + Partition) to (Start + Length)
+        # partition_min_x is LOCAL (e.g., 10.0)
+        # map_length is LOCAL (e.g., 20.0)
+        global_zone_start = self.start_x + self.partition_min_x
+        global_zone_end   = self.start_x + self.map_length
+
+        # Apply safety buffers (ignore 0.5m near partition, 1.0m near far wall)
+        valid_x_min = global_zone_start - 0.5 
+        valid_x_max = global_zone_end - 1.0
         
-        # Calculate heading error
-        cyaw = math.atan2(math.sin(self.current_yaw), math.cos(self.current_yaw))
-        yaw_err = target_angle - cyaw
-        yaw_err = math.atan2(math.sin(yaw_err), math.cos(yaw_err))
+        # Arena is typically -10 to +10 in Y. Ignore walls.
+        valid_y_min = -9.0
+        valid_y_max = 9.0
+        # ===============================================
 
-        cmd = Twist()
+        for i in range(start, end):
+            dist = ranges[i]
+            if not math.isfinite(dist) or dist > self.WASTE_DETECT_RANGE: 
+                continue
+            
+            angle = scan.angle_min + i * scan.angle_increment
+            global_angle = self.world_yaw + angle
+            
+            waste_x = self.world_x + dist * math.cos(global_angle)
+            waste_y = self.world_y + dist * math.sin(global_angle)
+            
+            # === STRICT GLOBAL FILTERING ===
+            # 1. Check X Bounds (Is it inside Robot 2's designated partition?)
+            if not (valid_x_min <= waste_x <= valid_x_max):
+                continue
+            
+            # 2. Check Y Bounds (Is it inside the side walls?)
+            if not (valid_y_min <= waste_y <= valid_y_max):
+                continue
 
-        # Logic: Turn first, then move
-        if abs(yaw_err) > 0.1:
-            cmd.linear.x = 0.0
-            cmd.angular.z = 1.5 * yaw_err
-            cmd.angular.z = max(-0.6, min(0.6, cmd.angular.z))
-        else:
-            if dist > 0.3:
-                cmd.linear.x = 0.4
-                cmd.angular.z = 1.0 * yaw_err
-            else:
-                self.stop_robot()
-                self.get_logger().info(f"COLLECTED WASTE AT: X={target['x']}, Y={target['y']}")
-                self.waste_list.pop(0) 
-                return 
-
-        self.cmd_pub.publish(cmd)
+            # 3. Passed Filters -> Valid Waste
+            if abs(angle) < math.radians(5):
+                self.approaching_waste = True
+                self.current_waste_distance = dist
+            
+            is_new = True
+            for (ex, ey) in self.detected_wastes:
+                if math.hypot(waste_x - ex, waste_y - ey) < self.WASTE_MERGE_DIST:
+                    is_new = False
+                    break
+            
+            if is_new:
+                rounded = (round(waste_x, 2), round(waste_y, 2))
+                self.detected_wastes.append(rounded)
+                self.get_logger().info(f"R2 VALID WASTE: {rounded}")
+            
+            break
 
     def lidar_callback(self, scan):
         if self.front_idx is None: self.compute_indices(scan)
@@ -209,7 +229,7 @@ class XAxisTrackerAndCleaner(Node):
 
         if self.state == "MEASURING":
             if self.current_front_dist < 0.6:
-                self.map_length = abs(self.current_x) + self.current_front_dist +1.0
+                self.map_length = abs(self.current_x) + self.current_front_dist + 1.0
                 msg = Float32(); msg.data = float(self.map_length); self.dim_pub.publish(msg)
                 self.stop_robot(); self.state = "BACKING_AFTER_MEASURE"
                 self.get_logger().info(f"Length: {self.map_length:.2f}") 
@@ -224,6 +244,21 @@ class XAxisTrackerAndCleaner(Node):
             self.check_start_cleaning()
 
         elif self.state == "CLEANING":
+            if self.approaching_waste:
+                self.current_waste_distance = self.current_front_dist
+                if self.current_waste_distance > 0.45:
+                    cmd = Twist(); cmd.linear.x = 0.2
+                    self.cmd_pub.publish(cmd)
+                else:
+                    self.get_logger().info("WASTE REMOVED")
+                    if self.detected_wastes:
+                        self.detected_wastes.pop() 
+                    self.approaching_waste = False; self.current_waste_distance = None; self.stop_robot()
+                return 
+            
+            if self.clean_step not in [0, 3, 6, 9]: 
+                self.scan_for_waste(scan, ranges)
+
             if self.clean_step == 0:
                 if self.turn_in_place(math.pi/2): self.clean_step = 1
             elif self.clean_step == 1:
@@ -237,28 +272,22 @@ class XAxisTrackerAndCleaner(Node):
             elif self.clean_step == 3:
                 if self.turn_in_place(math.pi): self.clean_step = 4
             elif self.clean_step == 4:
-                # --- SWARM CHECK ---
                 if self.current_x <= self.partition_min_x:
-                     self.get_logger().info(f"R2 Partition Reached ({self.current_x:.2f}). Switching to COLLECTING.")
-                     self.stop_robot()
-                     self.state = "COLLECTING"
-                     return
-                # -------------------
+                     self.get_logger().info(f"Partition Reached. Finished.")
+                     self.stop_robot(); self.state = "FINISHED"; return
 
                 if self.step_start_pos == 0.0: self.fixed_axis_value = self.current_y; self.step_start_pos = self.current_x
-                
                 if abs(self.current_x - self.step_start_pos) < 2.0: 
                     self.move_straight_locked(math.pi, 'y', self.fixed_axis_value)
                 else: 
                     self.step_start_pos = 0.0; self.fixed_axis_value = 0.0; self.clean_step = 5
-                    
             elif self.clean_step == 5:
                 if self.wait_in_place(2.0): self.clean_step = 6
             elif self.clean_step == 6:
                 if self.turn_in_place(-math.pi/2): self.clean_step = 7
-                
             elif self.clean_step == 7:
                 if self.fixed_axis_value == 0.0: self.fixed_axis_value = self.current_x
+                # Added Obstacle Safety Check here to prevent infinite loop
                 if self.current_y > 0.5 and self.current_front_dist > 0.6: 
                     self.move_straight_locked(-math.pi/2, 'x', self.fixed_axis_value)
                 else: 
@@ -268,27 +297,20 @@ class XAxisTrackerAndCleaner(Node):
             elif self.clean_step == 9:
                 if self.turn_in_place(math.pi): self.clean_step = 10
             elif self.clean_step == 10:
-                 # --- SWARM CHECK ---
                  if self.current_x <= self.partition_min_x:
-                     self.get_logger().info(f"R2 Partition Reached ({self.current_x:.2f}). Switching to COLLECTING.")
-                     self.stop_robot()
-                     self.state = "COLLECTING"
-                     return
-                 # -------------------
+                     self.get_logger().info(f"Partition Reached. Finished.")
+                     self.stop_robot(); self.state = "FINISHED"; return
 
                  if self.step_start_pos == 0.0: self.fixed_axis_value = self.current_y; self.step_start_pos = self.current_x
-                 
                  if abs(self.current_x - self.step_start_pos) < 2.0: 
                      self.move_straight_locked(math.pi, 'y', self.fixed_axis_value)
                  else: 
                      self.step_start_pos = 0.0; self.fixed_axis_value = 0.0; self.clean_step = 11
-                     
             elif self.clean_step == 11:
                 if self.wait_in_place(2.0): self.clean_step = 0
             
-        # --- COLLECTING STATE ---
-        elif self.state == "COLLECTING":
-            self.navigate_to_waste()
+        elif self.state == "FINISHED":
+            self.stop_robot()
 
     def check_start_cleaning(self):
         if self.state == "WAITING" and self.map_width is not None and self.map_length is not None:
