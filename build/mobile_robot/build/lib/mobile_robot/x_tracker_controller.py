@@ -16,7 +16,7 @@ class XAxisTrackerAndCleaner(Node):
         self.OFFSET_CLEAN   = 1.6
 
         # === WASTE DETECTION CONFIG ===
-        self.WASTE_DETECT_RANGE = 3.0      # Reduced to 3.0m to minimize far-wall noise
+        self.WASTE_DETECT_RANGE = 3.0      
         self.WASTE_MERGE_DIST = 0.8        
         self.WASTE_ANGLE_WINDOW = math.radians(40)
         # ==============================
@@ -104,6 +104,11 @@ class XAxisTrackerAndCleaner(Node):
         cmd = Twist()
         cmd.linear.x = 0.0
         cyaw = math.atan2(math.sin(self.current_yaw), math.cos(self.current_yaw))
+        
+        # NOTE: For Global navigation (COLLECTING), we use world_yaw
+        if self.state == "COLLECTING":
+            cyaw = self.world_yaw
+
         diff = target_yaw - cyaw
         diff = math.atan2(math.sin(diff), math.cos(diff))
 
@@ -167,21 +172,13 @@ class XAxisTrackerAndCleaner(Node):
         start = max(0, self.front_idx - half_window)
         end   = min(len(ranges), self.front_idx + half_window)
         
-        # === CALCULATE GLOBAL BOUNDARIES FOR ROBOT 2 ===
-        # Robot 2 Zone: From (Start + Partition) to (Start + Length)
-        # partition_min_x is LOCAL (e.g., 10.0)
-        # map_length is LOCAL (e.g., 20.0)
         global_zone_start = self.start_x + self.partition_min_x
         global_zone_end   = self.start_x + self.map_length
 
-        # Apply safety buffers (ignore 0.5m near partition, 1.0m near far wall)
         valid_x_min = global_zone_start - 0.5 
         valid_x_max = global_zone_end - 1.0
-        
-        # Arena is typically -10 to +10 in Y. Ignore walls.
         valid_y_min = -9.0
         valid_y_max = 9.0
-        # ===============================================
 
         for i in range(start, end):
             dist = ranges[i]
@@ -194,16 +191,9 @@ class XAxisTrackerAndCleaner(Node):
             waste_x = self.world_x + dist * math.cos(global_angle)
             waste_y = self.world_y + dist * math.sin(global_angle)
             
-            # === STRICT GLOBAL FILTERING ===
-            # 1. Check X Bounds (Is it inside Robot 2's designated partition?)
-            if not (valid_x_min <= waste_x <= valid_x_max):
-                continue
-            
-            # 2. Check Y Bounds (Is it inside the side walls?)
-            if not (valid_y_min <= waste_y <= valid_y_max):
-                continue
+            if not (valid_x_min <= waste_x <= valid_x_max): continue
+            if not (valid_y_min <= waste_y <= valid_y_max): continue
 
-            # 3. Passed Filters -> Valid Waste
             if abs(angle) < math.radians(5):
                 self.approaching_waste = True
                 self.current_waste_distance = dist
@@ -220,6 +210,58 @@ class XAxisTrackerAndCleaner(Node):
                 self.get_logger().info(f"R2 VALID WASTE: {rounded}")
             
             break
+            
+    # === NEW COLLECTION LOGIC ===
+    def trigger_collection_phase(self):
+        self.stop_robot()
+        if not self.detected_wastes:
+            self.get_logger().info("Partition Reached. No waste to collect. FINISHED.")
+            self.state = "FINISHED"
+        else:
+            self.get_logger().info(f"Partition Reached. Starting Collection of {len(self.detected_wastes)} items.")
+            self.state = "COLLECTING"
+
+    def navigate_to_waste(self):
+        if not self.detected_wastes:
+            self.get_logger().info("All waste collected.")
+            self.stop_robot()
+            self.state = "FINISHED"
+            return
+
+        # Target the LATEST detected waste (LIFO)
+        target = self.detected_wastes[-1]
+        
+        # Calculate Global Delta
+        dx = target[0] - self.world_x
+        dy = target[1] - self.world_y
+        dist = math.sqrt(dx*dx + dy*dy)
+        
+        # Standard Global Angle
+        target_angle = math.atan2(dy, dx)
+        
+        # Compare with World Yaw
+        yaw_err = target_angle - self.world_yaw
+        yaw_err = math.atan2(math.sin(yaw_err), math.cos(yaw_err))
+
+        cmd = Twist()
+
+        if abs(yaw_err) > 0.2:
+            # Turn in place logic
+            cmd.linear.x = 0.0 
+            cmd.angular.z = 1.5 * yaw_err
+            cmd.angular.z = max(-0.6, min(0.6, cmd.angular.z))
+        else:
+            if dist > 0.35: # Stop slightly before
+                cmd.linear.x = 0.4
+                cmd.angular.z = 1.0 * yaw_err 
+            else:
+                self.stop_robot()
+                self.get_logger().info(f"COLLECTED WASTE AT: {target}")
+                self.detected_wastes.pop() # Remove collected waste
+                return 
+
+        self.cmd_pub.publish(cmd)
+    # ============================
 
     def lidar_callback(self, scan):
         if self.front_idx is None: self.compute_indices(scan)
@@ -251,8 +293,9 @@ class XAxisTrackerAndCleaner(Node):
                     self.cmd_pub.publish(cmd)
                 else:
                     self.get_logger().info("WASTE REMOVED")
-                    if self.detected_wastes:
-                        self.detected_wastes.pop() 
+                    # Note: R2 cleaning logic just removes from path, doesn't remove from global list
+                    # because it might see it again? 
+                    # Actually, if we remove it, we assume we collected it.
                     self.approaching_waste = False; self.current_waste_distance = None; self.stop_robot()
                 return 
             
@@ -272,9 +315,10 @@ class XAxisTrackerAndCleaner(Node):
             elif self.clean_step == 3:
                 if self.turn_in_place(math.pi): self.clean_step = 4
             elif self.clean_step == 4:
+                # CHECK PARTITION LIMIT
                 if self.current_x <= self.partition_min_x:
-                     self.get_logger().info(f"Partition Reached. Finished.")
-                     self.stop_robot(); self.state = "FINISHED"; return
+                     self.trigger_collection_phase() # CHANGED
+                     return
 
                 if self.step_start_pos == 0.0: self.fixed_axis_value = self.current_y; self.step_start_pos = self.current_x
                 if abs(self.current_x - self.step_start_pos) < 2.0: 
@@ -287,7 +331,6 @@ class XAxisTrackerAndCleaner(Node):
                 if self.turn_in_place(-math.pi/2): self.clean_step = 7
             elif self.clean_step == 7:
                 if self.fixed_axis_value == 0.0: self.fixed_axis_value = self.current_x
-                # Added Obstacle Safety Check here to prevent infinite loop
                 if self.current_y > 0.5 and self.current_front_dist > 0.6: 
                     self.move_straight_locked(-math.pi/2, 'x', self.fixed_axis_value)
                 else: 
@@ -297,9 +340,10 @@ class XAxisTrackerAndCleaner(Node):
             elif self.clean_step == 9:
                 if self.turn_in_place(math.pi): self.clean_step = 10
             elif self.clean_step == 10:
+                 # CHECK PARTITION LIMIT
                  if self.current_x <= self.partition_min_x:
-                     self.get_logger().info(f"Partition Reached. Finished.")
-                     self.stop_robot(); self.state = "FINISHED"; return
+                     self.trigger_collection_phase() # CHANGED
+                     return
 
                  if self.step_start_pos == 0.0: self.fixed_axis_value = self.current_y; self.step_start_pos = self.current_x
                  if abs(self.current_x - self.step_start_pos) < 2.0: 
@@ -308,7 +352,10 @@ class XAxisTrackerAndCleaner(Node):
                      self.step_start_pos = 0.0; self.fixed_axis_value = 0.0; self.clean_step = 11
             elif self.clean_step == 11:
                 if self.wait_in_place(2.0): self.clean_step = 0
-            
+        
+        elif self.state == "COLLECTING":
+            self.navigate_to_waste()
+
         elif self.state == "FINISHED":
             self.stop_robot()
 
