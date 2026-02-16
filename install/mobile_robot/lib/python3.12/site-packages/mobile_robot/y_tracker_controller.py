@@ -7,6 +7,10 @@ from nav_msgs.msg import Odometry
 from std_msgs.msg import Float32, Int32
 import numpy as np
 import math
+import subprocess
+
+
+
 
 class YAxisTrackerAndCleaner(Node):
     def __init__(self):
@@ -17,7 +21,9 @@ class YAxisTrackerAndCleaner(Node):
         self.SAFETY_MARGIN  = 0.5 
 
         self.WASTE_DETECT_RANGE = 4.5     
-        self.WASTE_MERGE_DIST = 0.8         
+        self.WASTE_MERGE_DIST = 0.8 
+        self.waste_registry = {} # <--- ADD THIS
+        self.load_waste_map()        
         self.WASTE_ANGLE_WINDOW = math.radians(30) 
         
         self.cmd_pub = self.create_publisher(Twist, '/robot1/cmd_vel', 10)
@@ -57,8 +63,28 @@ class YAxisTrackerAndCleaner(Node):
         self.approaching_waste = False
         self.current_waste_distance = None
         self.detected_wastes = [] 
+        self.detected_wastes = [] 
+        self.deleted_names = set()
 
         self.get_logger().info("Robot 1 Ready: Measuring Width...")
+        # self.test_timer = self.create_timer(10.0, self.test_deletion_callback)
+        # self.get_logger().info("TEST: Scheduled deletion of 'waste_2' in 10 seconds...")
+    def test_deletion_callback(self):
+        # We only want to run this once
+        self.test_timer.cancel()
+        self.get_logger().info("TEST: Attempting to delete 'waste_2' now!")
+        self.delete_waste_visual("waste_2")
+    def load_waste_map(self):
+        try:
+            # Give it a second to ensure the file is written
+            import time
+            time.sleep(1.0) 
+            with open("waste_locations.csv", "r") as f:
+                for line in f:
+                    name, x, y = line.strip().split(',')
+                    self.waste_registry[(float(x), float(y))] = name
+        except Exception as e:
+            self.get_logger().error(f"Could not load map: {e}")
 
     def robot_count_callback(self, msg):
         if msg.data > self.robot_count:
@@ -142,7 +168,13 @@ class YAxisTrackerAndCleaner(Node):
 
     def move_straight_locked(self, target_yaw, axis_to_hold, target_val):
         cmd = Twist()
-        cmd.linear.x = 0.4
+        if self.current_front_dist < 0.6:
+            cmd.linear.x = 0.1 # Very slow for final approach
+        elif self.current_front_dist < 1.5:
+            cmd.linear.x = 0.2
+        else:
+            cmd.linear.x = 0.4
+
         cyaw = math.atan2(math.sin(self.current_yaw), math.cos(self.current_yaw))
         yaw_err = target_yaw - cyaw
         yaw_err = math.atan2(math.sin(yaw_err), math.cos(yaw_err))
@@ -150,7 +182,7 @@ class YAxisTrackerAndCleaner(Node):
         if axis_to_hold == 'x': pos_err = target_val - self.current_x
         elif axis_to_hold == 'y': pos_err = target_val - self.current_y
         K_YAW = 2.0; K_POS = 1.0
-        if self.current_front_dist < 0.8: K_POS = 0.0
+        
         correction = K_YAW * yaw_err
         if abs(target_yaw - 0.0) < 0.1: correction += K_POS * pos_err
         elif abs(target_yaw - math.pi) < 0.1 or abs(target_yaw + math.pi) < 0.1: correction -= K_POS * pos_err
@@ -171,39 +203,44 @@ class YAxisTrackerAndCleaner(Node):
 
     def navigate_to_waste(self):
         if not self.detected_wastes:
+            self.get_logger().info("All waste collected.")
             self.stop_robot()
-            self.get_logger().info("All waste collected. FINISHED.")
             self.state = "FINISHED"
             return
 
-        target = self.detected_wastes[-1]
-        
-        # Calculate Global Delta
-        dx = target[0] - self.world_x
-        dy = target[1] - self.world_y
+        target_dict = self.detected_wastes[-1]
+        target_pos = target_dict['pos']
+    
+        # Calculate distance
+        dx = target_pos[0] - self.world_x
+        dy = target_pos[1] - self.world_y
         dist = math.sqrt(dx*dx + dy*dy)
-        
-        # Standard Global Angle (atan2(y, x))
+    
         target_angle = math.atan2(dy, dx)
-        
-        yaw_err = target_angle - self.world_yaw
-        yaw_err = math.atan2(math.sin(yaw_err), math.cos(yaw_err))
+        yaw_err = math.atan2(math.sin(target_angle - self.world_yaw), math.cos(target_angle - self.world_yaw))
 
         cmd = Twist()
 
         if abs(yaw_err) > 0.2:
-            cmd.linear.x = 0.0 
-            cmd.angular.z = 1.5 * yaw_err
-            cmd.angular.z = max(-0.6, min(0.6, cmd.angular.z))
+            cmd.angular.z = max(-0.6, min(0.6, 1.5 * yaw_err))
+        # CHANGE THIS: Stop at 0.7m instead of 0.35m
+        elif dist > 0.7: 
+            cmd.linear.x = 0.2
+            cmd.angular.z = 1.0 * yaw_err 
         else:
-            if dist > 0.35: # Stop 35cm away
-                cmd.linear.x = 0.4
-                cmd.angular.z = 1.0 * yaw_err 
-            else:
-                self.stop_robot()
-                self.get_logger().info(f"COLLECTED WASTE AT: {target}")
-                self.detected_wastes.pop() 
-                return 
+            # Remove it from the list immediately so the LiDAR logic stops looking for it
+            self.detected_wastes.pop()
+            # REACHED: Stop robot, delete from Gazebo, THEN remove from memory
+            self.stop_robot()
+            self.get_logger().info(f"ACTION: Deleting {target_dict['name']} at dist {dist:.2f}")
+        
+            self.delete_waste_visual(target_dict['name'])
+        
+           
+        
+            # Give Gazebo 0.5 seconds to process the deletion before the robot moves again
+            
+            return 
 
         self.cmd_pub.publish(cmd)
 
@@ -231,23 +268,39 @@ class YAxisTrackerAndCleaner(Node):
                     if waste_y < 0.8 or waste_y > (self.map_width - 0.8):
                         continue
 
-                # === APPROACH & STORE ===
-                if abs(angle) < math.radians(5):
-                    self.approaching_waste = True
-                    self.current_waste_distance = dist
+                
                 
                 is_new = True
-                for (ex, ey) in self.detected_wastes:
+                for waste_entry in self.detected_wastes:
+                    # We must extract the tuple (ex, ey) from the dictionary first
+                    ex, ey = waste_entry['pos'] 
                     if math.hypot(waste_x - ex, waste_y - ey) < self.WASTE_MERGE_DIST:
                         is_new = False
                         break
                 
                 if is_new:
                     rounded = (round(waste_x, 2), round(waste_y, 2))
-                    self.detected_wastes.append(rounded)
-                    self.get_logger().info(f"NEW GLOBAL WASTE: {rounded}")
+                    real_name = "unknown"
+                    min_match_dist = 1.0 
+                    for (rx, ry), name in self.waste_registry.items():
+                        d = math.hypot(waste_x - rx, waste_y - ry)
+                        if d < min_match_dist:
+                            real_name = name
+                            min_match_dist = d
+
+                    # if real_name != "unknown":
+                    #     # Check if this name is already in the list to avoid duplicates
+                    #     if not any(w['name'] == real_name for w in self.detected_wastes):
+                    #         self.detected_wastes.append({'pos': (waste_x, waste_y), 'name': real_name})
+                    #         self.get_logger().info(f"REGISTERED: {real_name}")
+                    if real_name != "unknown":
+                        # UPDATE THIS IF STATEMENT
+                        if real_name not in self.deleted_names and not any(w['name'] == real_name for w in self.detected_wastes):
+                            self.detected_wastes.append({'pos': (waste_x, waste_y), 'name': real_name})
+                            self.get_logger().info(f"REGISTERED: {real_name}")
                 
-                break 
+                    # THIS BREAK MUST BE AT THIS INDENTATION LEVEL (line 284 in your image)
+                    break 
     # =================
 
     def run_cleaning_fsm(self):
@@ -262,8 +315,12 @@ class YAxisTrackerAndCleaner(Node):
         elif self.clean_step == 3:
             if self.turn_in_place(math.pi): self.fixed_axis_value = self.current_x; self.clean_step = 4
         elif self.clean_step == 4:
-            if self.current_y > 0.5 and self.current_front_dist > 0.6: self.move_straight_locked(math.pi, 'x', self.fixed_axis_value)
-            else: self.clean_step = 5
+            # ONLY move to step 5 (backward) if we are actually at the end of the room (y < 0.5)
+            if self.current_y > 0.7: 
+                self.move_straight_locked(math.pi, 'x', self.fixed_axis_value)
+            else: 
+                self.get_logger().info("Bottom wall reached. Turning...")
+                self.clean_step = 5
         elif self.clean_step == 5:
             if self.move_backward(1.0): self.clean_step = 6
         elif self.clean_step == 6:
@@ -277,8 +334,12 @@ class YAxisTrackerAndCleaner(Node):
         elif self.clean_step == 9:
             if self.turn_in_place(0.0): self.fixed_axis_value = self.current_x; self.clean_step = 10
         elif self.clean_step == 10:
-            if self.current_y < (self.map_width - 0.5) and self.current_front_dist > 0.6: self.move_straight_locked(0.0, 'x', self.fixed_axis_value)
-            else: self.clean_step = 11
+           # ONLY move to step 11 if we are near the top wall
+            if self.current_y < (self.map_width - 0.7):
+                self.move_straight_locked(0.0, 'x', self.fixed_axis_value)
+            else:
+                self.get_logger().info("Top wall reached. Turning...")
+                self.clean_step = 11
         elif self.clean_step == 11:
             if self.move_backward(1.0): self.clean_step = 0 
 
@@ -286,7 +347,25 @@ class YAxisTrackerAndCleaner(Node):
         if self.front_idx is None: self.compute_indices(scan)
         ranges = np.array(scan.ranges)
         ranges = np.where(np.isfinite(ranges), ranges, 12.0)
-        self.current_front_dist = ranges[self.front_idx]
+        HALF_WIDTH = 0.45 
+        self.current_front_dist = 12.0
+        self.best_blocker_angle = 0.0  # Track the angle of the closest hit
+
+        # Search a wider window (e.g., +/- 45 degrees) to catch side-clipping
+        search_window = int(math.radians(45) / scan.angle_increment)
+        start_i = max(0, self.front_idx - search_window)
+        end_i = min(len(ranges), self.front_idx + search_window)
+
+        for i in range(start_i, end_i):
+            d = ranges[i]
+            angle = (i - self.front_idx) * scan.angle_increment
+            
+            # If the hit is physically within the robot's width corridor
+            if abs(d * math.sin(angle)) < HALF_WIDTH:
+                if d < self.current_front_dist:
+                    self.current_front_dist = d
+                    # Store relative angle to pinpoint the waste later
+                    self.best_blocker_angle = angle
 
         if self.state == "MEASURING":
             if self.current_front_dist < 0.6:
@@ -308,29 +387,91 @@ class YAxisTrackerAndCleaner(Node):
             self.check_start_cleaning()
 
         elif self.state == "CLEANING":
-            if self.approaching_waste:
-                self.current_waste_distance = self.current_front_dist
-                if self.current_waste_distance > 0.45:
-                    cmd = Twist(); cmd.linear.x = 0.2
-                    self.cmd_pub.publish(cmd)
-                else:
-                    self.get_logger().info("WASTE REMOVED/COLLECTED")
-                    self.approaching_waste = False; self.current_waste_distance = None; self.stop_robot()
-                return
+            # 1. Determine if we are near a wall (to avoid trying to "clean" the room boundaries)
+            is_near_wall = False
+            if self.clean_step in [4, 10]: 
+                if self.current_y < 0.8 or self.current_y > (self.map_width - 0.8):
+                    is_near_wall = True
 
-            if not self.is_turning:
+            # 2. Check for physical blockage (Waste)
+            # We use a 0.8m threshold to match your collection logic
+            BLOCK_DIST = 1.0 # Detection range
+            if self.current_front_dist < BLOCK_DIST and not is_near_wall:
+                self.stop_robot()
+
+                if self.detected_wastes:
+                    # USE THE ACTUAL ANGLE of the beam that detected the waste
+                    # world_yaw (robot heading) + best_blocker_angle (beam offset)
+                    total_angle = self.world_yaw + self.best_blocker_angle
+                    obs_x = self.world_x + self.current_front_dist * math.cos(total_angle)
+                    obs_y = self.world_y + self.current_front_dist * math.sin(total_angle)
+
+                    best_idx = -1
+                    min_dist_found = 1.0 
+        
+                    for i, waste in enumerate(self.detected_wastes):
+                        wx, wy = waste['pos']
+                        if math.hypot(obs_x - wx, obs_y - wy) < min_dist_found:
+                            min_dist_found = math.hypot(obs_x - wx, obs_y - wy)
+                            best_idx = i
+
+                    if best_idx != -1:
+                        target_name = self.detected_wastes[best_idx]['name']
+                        if target_name not in self.deleted_names:
+                            self.get_logger().info(f"MATCH FOUND (Side): Deleting {target_name}")
+                            self.deleted_names.add(target_name)
+                            self.delete_waste_visual(target_name)
+                            self.detected_wastes.pop(best_idx)
+                            
+                            # Re-anchor to prevent rotation drift
+                            if self.clean_step in [1, 7]: self.fixed_axis_value = self.current_y
+                            elif self.clean_step in [4, 10]: self.fixed_axis_value = self.current_x
+                            
+                            return self.wait_in_place(1.0)
+            # 3. Only scan for new waste if we aren't currently blocked
+            if self.clean_step in [1, 4, 7, 10]:
                 self.scan_for_waste(scan, ranges)
 
             self.run_cleaning_fsm()
-        
         elif self.state == "COLLECTING":
             self.navigate_to_waste()
+
+        elif self.state == "FINISHED":
+            self.stop_robot()
 
     def check_start_cleaning(self):
         if self.state == "WAITING" and self.map_length is not None:
             self.state = "CLEANING"
             self.partition_max_x = self.map_length / float(self.robot_count)
             self.get_logger().info(f"R1 Partition: X [0 -> {self.partition_max_x:.2f}]")
+    def delete_waste_visual(self, waste_name):
+        # # If using Gazebo Classic (standard for many ROS 2 tutorials)
+        # # The most reliable way is using the 'delete_entity' service
+        # from gazebo_msgs.srv import DeleteEntity
+    
+        # client = self.create_client(DeleteEntity, '/delete_entity')
+        # while not client.wait_for_service(timeout_sec=1.0):
+        #     self.get_logger().info('Delete service not available, waiting...')
+    
+        # request = DeleteEntity.Request()
+        # request.name = waste_name
+        # client.call_async(request)
+        # self.get_logger().info(f"!!! ROS SERVICE SENT: Deleting {waste_name} !!!")
+        import subprocess
+        # Native Gazebo Harmonic (Jazzy) command
+        cmd = [
+        'gz', 'service', '-s', '/world/default/remove',
+        '--reqtype', 'gz.msgs.Entity',
+        '--reptype', 'gz.msgs.Boolean',
+        '--timeout', '2000',
+        '--req', f'name: "{waste_name}", type: MODEL'
+        ]
+        try:
+            # Use Popen instead of run so it doesn't block the robot's movement
+            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.get_logger().info(f"GAZEBO CMD SENT: {waste_name}")
+        except Exception as e:
+            self.get_logger().error(f"Command failed: {e}")
 
     def stop_robot(self): self.cmd_pub.publish(Twist())
 

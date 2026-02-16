@@ -16,7 +16,10 @@ setup(
         (os.path.join('share', package_name, 'launch'), glob('launch/*')),
 
         # Install model files
-        (os.path.join('share', package_name, 'model'), glob('model/*')),
+        (os.path.join('share', package_name, 'model'), glob('model/*.xacro')),
+        (os.path.join('share', package_name, 'model'), glob('model/*.gazebo')),
+        (os.path.join('share', package_name, 'model'), glob('model/*.macro')),
+        (os.path.join('share', package_name, 'model'), glob('model/*.urdf')),
 
         # Install parameters
         (os.path.join('share', package_name, 'parameters'), glob('parameters/*')),
@@ -24,6 +27,9 @@ setup(
         # >>>>>>>>>>>>>>>>> ADD THIS <<<<<<<<<<<<<<<<<<
         # Install world files
         (os.path.join('share', package_name, 'worlds'), glob('worlds/*.world')),
+        (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
+        (os.path.join('share', package_name, 'launch'), glob('launch/*.py')), # Ensure all .py files in launch/ are copied
+    
         # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
     ],
     install_requires=['setuptools'],
@@ -37,10 +43,9 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'y_tracker_controller = mobile_robot.y_tracker_controller:main',
-            'x_tracker_controller = mobile_robot.x_tracker_controller:main',
-            'robot_chat = mobile_robot.robot_chat:main',
-            'partition_manager = mobile_robot.partition_manager:main',
+            'y_tracker = mobile_robot.y_tracker_controller:main',
+            'x_tracker = mobile_robot.x_tracker_controller:main',
+            'robot_chat = mobile_robot.robot_chat:main'
         ],
     },
 )

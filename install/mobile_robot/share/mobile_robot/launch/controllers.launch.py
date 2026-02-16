@@ -8,7 +8,7 @@ def generate_launch_description():
     # 1. Controller for Robot 1 (Y-Tracker & Cleaner)
     controller1_node = Node(
         package=package_name,
-        executable='y_tracker_controller', 
+        executable='y_tracker', 
         name='y_tracker_node',
         output='screen',
         parameters=[{'use_sim_time': True}],
@@ -22,7 +22,7 @@ def generate_launch_description():
     # 2. Controller for Robot 2 (X-Tracker & Cleaner)
     controller2_node = Node(
         package=package_name,
-        executable='x_tracker_controller', 
+        executable='x_tracker', 
         name='x_tracker_node',
         output='screen',
         parameters=[{'use_sim_time': True}],

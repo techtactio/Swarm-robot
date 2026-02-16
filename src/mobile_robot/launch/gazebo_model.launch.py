@@ -4,7 +4,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
-from launch.actions import IncludeLaunchDescription, TimerAction # <--- Add TimerAction
+from launch.actions import IncludeLaunchDescription, TimerAction, ExecuteProcess # <--- Added ExecuteProcess
 
 def generate_launch_description():
     namePackage = 'mobile_robot'
@@ -14,7 +14,6 @@ def generate_launch_description():
     
     robot1_xacro_path = os.path.join(model_dir, 'robot1.xacro')
     robot2_xacro_path = os.path.join(model_dir, 'robot2.xacro')
-    # robot3_xacro_path = os.path.join(model_dir, 'robot2.xacro')
 
     def process_xacro_with_name(robot_name, xacro_file_path):
         command = ['xacro', xacro_file_path, f'robot_name:={robot_name}']
@@ -35,37 +34,18 @@ def generate_launch_description():
         launch_arguments={'gz_args': f'-r -v4 {world_path}', 'on_exit_shutdown': 'true'}.items()
     )
 
-    # === FIXED SPAWN POSITIONS ===
-    
-    # Robot 1 (Y-Tracker): Spawn in OPEN SPACE
+    # === ROBOT SPAWNERS ===
     spawnModelNodeGazebo1 = Node(
         package='ros_gz_sim', executable='create',
-        arguments=[
-            '-name', 'robot1',
-            '-topic', 'robot1/robot_description',
-            '-x', '-9.4',   # Changed from -9.4
-            '-y', '9.4',   # Changed from 9.4
-            '-z', '0.00',   # Drop from height to prevent stuck wheels
-            '-Y', '0.0' # Face +Y
-        ],
+        arguments=['-name', 'robot1', '-topic', 'robot1/robot_description', '-x', '-9.4', '-y', '9.4', '-z', '0.05', '-Y', '0.0'],
         output='screen',
     )
     
-    # Robot 2 (X-Tracker): Spawn facing X AXIS
     spawnModelNodeGazebo2 = Node(
         package='ros_gz_sim', executable='create',
-        arguments=[
-            '-name', 'robot2',
-            '-topic', 'robot2/robot_description',
-            '-x', '-9.4',  # Start back a bit
-            '-y', '8.4',  # Away from Robot 1
-            '-z', '0.00',
-            '-Y', '-1.57'  # Face +X (So X-Tracker works)
-        ],
+        arguments=['-name', 'robot2', '-topic', 'robot2/robot_description', '-x', '-9.4', '-y', '8.4', '-z', '0.05', '-Y', '-1.57'],
         output='screen',
     )
-
-    
 
     nodeRobotStatePublisher1 = Node(
         package='robot_state_publisher', executable='robot_state_publisher',
@@ -81,7 +61,6 @@ def generate_launch_description():
         remappings=[('/tf', 'tf'), ('/tf_static', 'tf_static')]
     )
     
-
     bridge_params = os.path.join(get_package_share_directory(namePackage), 'parameters', 'bridge_parameters.yaml')
     start_gazebo_ros_bridge_cmd = Node(
         package='ros_gz_bridge', executable='parameter_bridge',
@@ -89,63 +68,42 @@ def generate_launch_description():
         output='screen',
     )
 
-    # === ROBOT COMMUNICATION NODES ===
-    
-    # Chat Node for Robot 1
-    chatNode1 = Node(
-        package=namePackage, # 'mobile_robot'
-        executable='robot_chat',
-        namespace='robot1',
+    chatNode1 = Node(package=namePackage, executable='robot_chat', namespace='robot1', output='screen')
+    chatNode2 = Node(package=namePackage, executable='robot_chat', namespace='robot2', output='screen')
+    # === ROBOT TRACKER NODES ===
+    # These start your y_axis_tracker script for each robot
+    trackerNode1 = Node(
+        package=namePackage, 
+        executable='y_tracker', 
+        namespace='robot1', 
         output='screen'
     )
 
-    # Chat Node for Robot 2
-    chatNode2 = Node(
-        package=namePackage, # 'mobile_robot'
-        executable='robot_chat',
-        namespace='robot2',
+    trackerNode2 = Node(
+        package=namePackage, 
+        executable='x_tracker', 
+        namespace='robot2', 
         output='screen'
     )
-    # #=====for Robot 3 ========
-    # spawnModelNodeGazebo3 = Node(
-    #     package='ros_gz_sim', executable='create',
-    #     arguments=[
-    #         '-name', 'robot3',
-    #         '-topic', 'robot3/robot_description',
-    #         '-x', '-9.4',  # Start back a bit
-    #         '-y', '7.4',  # Away from Robot 1
-    #         '-z', '0.00',
-    #         '-Y', '-1.57'  # Face +X (So X-Tracker works)
-    #     ],
-    #     output='screen',
-    # )
-    # nodeRobotStatePublisher3= Node(
-    #     package='robot_state_publisher', executable='robot_state_publisher',
-    #     namespace='robot3', output='screen',
-    #     parameters=[{'robot_description': robot2_description, 'use_sim_time': True}],
-    #     remappings=[('/tf', 'tf'), ('/tf_static', 'tf_static')]
-    # )
-    # chatNode3 = Node(
-    #     package=namePackage, # 'mobile_robot'
-    #     executable='robot_chat',
-    #     namespace='robot3',
-    #     output='screen'
-    # )
-    # delayed_robot3_spawn = TimerAction(
-    #     period=30.0,
-    #     actions=[
-    #         spawnModelNodeGazebo3,
-    #         nodeRobotStatePublisher3,
-    #         chatNode3
-    #     ]
-    # )
+
+    # === NEW: SPAWN WASTE SCRIPT ===
+    # This runs "python3 <path_to_spawn_waste.py>"
+    spawn_waste_cmd = ExecuteProcess(
+        cmd=['python3', os.path.join(get_package_share_directory(namePackage), 'launch', 'spawn_waste.py')],
+        output='screen'
+    )
+
+    # We wrap it in a TimerAction to wait 5 seconds for Gazebo to load before spawning waste
+    delayed_waste_spawn = TimerAction(
+        period=5.0,
+        actions=[spawn_waste_cmd]
+    )
 
     return LaunchDescription([
         gazeboLaunch,
         nodeRobotStatePublisher1, spawnModelNodeGazebo1, chatNode1,
         nodeRobotStatePublisher2, spawnModelNodeGazebo2, chatNode2,
-        
-        #for robot 3
-        # delayed_robot3_spawn,
-        start_gazebo_ros_bridge_cmd
+        start_gazebo_ros_bridge_cmd,
+        delayed_waste_spawn 
+    
     ])
