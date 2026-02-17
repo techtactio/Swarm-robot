@@ -24,7 +24,7 @@ class YAxisTrackerAndCleaner(Node):
         self.WASTE_MERGE_DIST = 0.8 
         self.waste_registry = {} # <--- ADD THIS
         self.load_waste_map()        
-        self.WASTE_ANGLE_WINDOW = math.radians(30) 
+        self.WASTE_ANGLE_WINDOW = math.radians(90) 
         
         self.cmd_pub = self.create_publisher(Twist, '/robot1/cmd_vel', 10)
         self.dim_pub = self.create_publisher(Float32, '/map/width', 10)

@@ -7,6 +7,7 @@ from nav_msgs.msg import Odometry
 from std_msgs.msg import Float32, Int32
 import numpy as np
 import math
+import subprocess
 
 class XAxisTrackerAndCleaner(Node):
     def __init__(self):
@@ -16,9 +17,12 @@ class XAxisTrackerAndCleaner(Node):
         self.OFFSET_CLEAN   = 1.6
 
         # === WASTE DETECTION CONFIG ===
-        self.WASTE_DETECT_RANGE = 3.0      
+        self.WASTE_DETECT_RANGE = 4.5    
         self.WASTE_MERGE_DIST = 0.8        
-        self.WASTE_ANGLE_WINDOW = math.radians(40)
+        self.WASTE_ANGLE_WINDOW = math.radians(90)
+        self.waste_registry = {}
+        self.load_waste_map()
+        self.deleted_names = set()
         # ==============================
 
         self.cmd_pub = self.create_publisher(Twist, '/robot2/cmd_vel', 10)
@@ -54,11 +58,21 @@ class XAxisTrackerAndCleaner(Node):
         self.front_idx = None
         self.right_idx = None
 
-        self.approaching_waste = False
-        self.current_waste_distance = None
-        self.detected_wastes = [] 
+        self.best_blocker_angle = 0.0
+        self.detected_wastes = [] # Will hold dicts: {'pos': (x, y), 'name': real_name}
 
         self.get_logger().info("Robot 2 Ready: Measuring Length...")
+
+    def load_waste_map(self):
+        try:
+            import time
+            time.sleep(1.0) 
+            with open("waste_locations.csv", "r") as f:
+                for line in f:
+                    name, x, y = line.strip().split(',')
+                    self.waste_registry[(float(x), float(y))] = name
+        except Exception as e:
+            self.get_logger().error(f"Could not load map: {e}")
 
     def robot_count_callback(self, msg):
         if msg.data > self.robot_count:
@@ -105,7 +119,6 @@ class XAxisTrackerAndCleaner(Node):
         cmd.linear.x = 0.0
         cyaw = math.atan2(math.sin(self.current_yaw), math.cos(self.current_yaw))
         
-        # NOTE: For Global navigation (COLLECTING), we use world_yaw
         if self.state == "COLLECTING":
             cyaw = self.world_yaw
 
@@ -193,23 +206,29 @@ class XAxisTrackerAndCleaner(Node):
             
             if not (valid_x_min <= waste_x <= valid_x_max): continue
             if not (valid_y_min <= waste_y <= valid_y_max): continue
-
-            if abs(angle) < math.radians(5):
-                self.approaching_waste = True
-                self.current_waste_distance = dist
             
             is_new = True
-            for (ex, ey) in self.detected_wastes:
+            for waste_entry in self.detected_wastes:
+                ex, ey = waste_entry['pos']
                 if math.hypot(waste_x - ex, waste_y - ey) < self.WASTE_MERGE_DIST:
                     is_new = False
                     break
             
             if is_new:
-                rounded = (round(waste_x, 2), round(waste_y, 2))
-                self.detected_wastes.append(rounded)
-                self.get_logger().info(f"R2 VALID WASTE: {rounded}")
-            
-            break
+                real_name = "unknown"
+                min_match_dist = 1.0 
+                for (rx, ry), name in self.waste_registry.items():
+                    d = math.hypot(waste_x - rx, waste_y - ry)
+                    if d < min_match_dist:
+                        real_name = name
+                        min_match_dist = d
+
+                if real_name != "unknown":
+                    if real_name not in self.deleted_names and not any(w['name'] == real_name for w in self.detected_wastes):
+                        self.detected_wastes.append({'pos': (waste_x, waste_y), 'name': real_name})
+                        self.get_logger().info(f"R2 REGISTERED: {real_name}")
+                
+                break
             
     # === NEW COLLECTION LOGIC ===
     def trigger_collection_phase(self):
@@ -228,37 +247,31 @@ class XAxisTrackerAndCleaner(Node):
             self.state = "FINISHED"
             return
 
-        # Target the LATEST detected waste (LIFO)
-        target = self.detected_wastes[-1]
+        target_dict = self.detected_wastes[-1]
+        target_pos = target_dict['pos']
         
-        # Calculate Global Delta
-        dx = target[0] - self.world_x
-        dy = target[1] - self.world_y
+        dx = target_pos[0] - self.world_x
+        dy = target_pos[1] - self.world_y
         dist = math.sqrt(dx*dx + dy*dy)
         
-        # Standard Global Angle
         target_angle = math.atan2(dy, dx)
-        
-        # Compare with World Yaw
         yaw_err = target_angle - self.world_yaw
         yaw_err = math.atan2(math.sin(yaw_err), math.cos(yaw_err))
 
         cmd = Twist()
 
         if abs(yaw_err) > 0.2:
-            # Turn in place logic
             cmd.linear.x = 0.0 
-            cmd.angular.z = 1.5 * yaw_err
-            cmd.angular.z = max(-0.6, min(0.6, cmd.angular.z))
+            cmd.angular.z = max(-0.6, min(0.6, 1.5 * yaw_err))
+        elif dist > 0.7: 
+            cmd.linear.x = 0.2
+            cmd.angular.z = 1.0 * yaw_err 
         else:
-            if dist > 0.35: # Stop slightly before
-                cmd.linear.x = 0.4
-                cmd.angular.z = 1.0 * yaw_err 
-            else:
-                self.stop_robot()
-                self.get_logger().info(f"COLLECTED WASTE AT: {target}")
-                self.detected_wastes.pop() # Remove collected waste
-                return 
+            self.detected_wastes.pop() 
+            self.stop_robot()
+            self.get_logger().info(f"ACTION: Deleting {target_dict['name']} at dist {dist:.2f}")
+            self.delete_waste_visual(target_dict['name'])
+            return 
 
         self.cmd_pub.publish(cmd)
     # ============================
@@ -267,7 +280,22 @@ class XAxisTrackerAndCleaner(Node):
         if self.front_idx is None: self.compute_indices(scan)
         ranges = np.array(scan.ranges)
         ranges = np.where(np.isfinite(ranges), ranges, 12.0)
-        self.current_front_dist = ranges[self.front_idx]
+        
+        # Calculate structured front distance to prevent side-clipping
+        HALF_WIDTH = 0.45 
+        self.current_front_dist = 12.0
+        self.best_blocker_angle = 0.0 
+        search_window = int(math.radians(45) / scan.angle_increment)
+        start_i = max(0, self.front_idx - search_window)
+        end_i = min(len(ranges), self.front_idx + search_window)
+
+        for i in range(start_i, end_i):
+            d = ranges[i]
+            angle = (i - self.front_idx) * scan.angle_increment
+            if abs(d * math.sin(angle)) < HALF_WIDTH:
+                if d < self.current_front_dist:
+                    self.current_front_dist = d
+                    self.best_blocker_angle = angle
 
         if self.state == "MEASURING":
             if self.current_front_dist < 0.6:
@@ -286,26 +314,49 @@ class XAxisTrackerAndCleaner(Node):
             self.check_start_cleaning()
 
         elif self.state == "CLEANING":
-            if self.approaching_waste:
-                self.current_waste_distance = self.current_front_dist
-                if self.current_waste_distance > 0.45:
-                    cmd = Twist(); cmd.linear.x = 0.2
-                    self.cmd_pub.publish(cmd)
-                else:
-                    self.get_logger().info("WASTE REMOVED")
-                    # Note: R2 cleaning logic just removes from path, doesn't remove from global list
-                    # because it might see it again? 
-                    # Actually, if we remove it, we assume we collected it.
-                    self.approaching_waste = False; self.current_waste_distance = None; self.stop_robot()
-                return 
+            # REMOVED: is_near_wall logic that was falsely ignoring waste near the edges.
             
-            if self.clean_step not in [0, 3, 6, 9]: 
+            BLOCK_DIST = 1.0
+            # TRIGGER ALWAYS: Check for waste if anything gets within 1.0m
+            if self.current_front_dist < BLOCK_DIST:
+                self.stop_robot()
+                if self.detected_wastes:
+                    total_angle = self.world_yaw + self.best_blocker_angle
+                    obs_x = self.world_x + self.current_front_dist * math.cos(total_angle)
+                    obs_y = self.world_y + self.current_front_dist * math.sin(total_angle)
+
+                    best_idx = -1
+                    min_dist_found = 1.0 
+                    for i, waste in enumerate(self.detected_wastes):
+                        wx, wy = waste['pos']
+                        if math.hypot(obs_x - wx, obs_y - wy) < min_dist_found:
+                            min_dist_found = math.hypot(obs_x - wx, obs_y - wy)
+                            best_idx = i
+
+                    if best_idx != -1:
+                        target_name = self.detected_wastes[best_idx]['name']
+                        if target_name not in self.deleted_names:
+                            self.get_logger().info(f"MATCH FOUND (Side): Deleting {target_name}")
+                            self.deleted_names.add(target_name)
+                            self.delete_waste_visual(target_name)
+                            self.detected_wastes.pop(best_idx)
+                            
+                            # Re-anchor based on axis orientation
+                            if self.clean_step in [1, 7]: self.fixed_axis_value = self.current_x
+                            elif self.clean_step in [4, 10]: self.fixed_axis_value = self.current_y
+                            
+                            return self.wait_in_place(1.0)
+            
+            # Scan only while moving straight
+            if self.clean_step in [1, 4, 7, 10]: 
                 self.scan_for_waste(scan, ranges)
 
+            # --- S-Shape FSM Logic ---
             if self.clean_step == 0:
                 if self.turn_in_place(math.pi/2): self.clean_step = 1
             elif self.clean_step == 1:
                 if self.fixed_axis_value == 0.0: self.fixed_axis_value = self.current_x
+                # RESTORED SAFETY: Turns if odometry says so, OR if it hits a physical wall at 0.6m
                 if self.current_y < (self.map_width - 0.5) and self.current_front_dist > 0.6: 
                     self.move_straight_locked(math.pi/2, 'x', self.fixed_axis_value)
                 else: 
@@ -315,13 +366,13 @@ class XAxisTrackerAndCleaner(Node):
             elif self.clean_step == 3:
                 if self.turn_in_place(math.pi): self.clean_step = 4
             elif self.clean_step == 4:
-                # CHECK PARTITION LIMIT
                 if self.current_x <= self.partition_min_x:
-                     self.trigger_collection_phase() # CHANGED
+                     self.trigger_collection_phase()
                      return
 
                 if self.step_start_pos == 0.0: self.fixed_axis_value = self.current_y; self.step_start_pos = self.current_x
-                if abs(self.current_x - self.step_start_pos) < 2.0: 
+                # ADDED SAFETY: Protects against X-axis walls
+                if abs(self.current_x - self.step_start_pos) < 2.0 and self.current_front_dist > 0.6: 
                     self.move_straight_locked(math.pi, 'y', self.fixed_axis_value)
                 else: 
                     self.step_start_pos = 0.0; self.fixed_axis_value = 0.0; self.clean_step = 5
@@ -331,6 +382,7 @@ class XAxisTrackerAndCleaner(Node):
                 if self.turn_in_place(-math.pi/2): self.clean_step = 7
             elif self.clean_step == 7:
                 if self.fixed_axis_value == 0.0: self.fixed_axis_value = self.current_x
+                # RESTORED SAFETY: Turns if odometry says so, OR if it hits a physical wall at 0.6m
                 if self.current_y > 0.5 and self.current_front_dist > 0.6: 
                     self.move_straight_locked(-math.pi/2, 'x', self.fixed_axis_value)
                 else: 
@@ -340,19 +392,19 @@ class XAxisTrackerAndCleaner(Node):
             elif self.clean_step == 9:
                 if self.turn_in_place(math.pi): self.clean_step = 10
             elif self.clean_step == 10:
-                 # CHECK PARTITION LIMIT
                  if self.current_x <= self.partition_min_x:
-                     self.trigger_collection_phase() # CHANGED
+                     self.trigger_collection_phase() 
                      return
 
                  if self.step_start_pos == 0.0: self.fixed_axis_value = self.current_y; self.step_start_pos = self.current_x
-                 if abs(self.current_x - self.step_start_pos) < 2.0: 
+                 # ADDED SAFETY: Protects against X-axis walls
+                 if abs(self.current_x - self.step_start_pos) < 2.0 and self.current_front_dist > 0.6: 
                      self.move_straight_locked(math.pi, 'y', self.fixed_axis_value)
                  else: 
                      self.step_start_pos = 0.0; self.fixed_axis_value = 0.0; self.clean_step = 11
             elif self.clean_step == 11:
                 if self.wait_in_place(2.0): self.clean_step = 0
-        
+
         elif self.state == "COLLECTING":
             self.navigate_to_waste()
 
@@ -364,6 +416,20 @@ class XAxisTrackerAndCleaner(Node):
             self.state = "CLEANING"
             self.partition_min_x = self.map_length / float(self.robot_count)
             self.get_logger().info(f"R2 Partition: X [{self.partition_min_x:.2f} -> {self.map_length:.2f}]")
+
+    def delete_waste_visual(self, waste_name):
+        cmd = [
+        'gz', 'service', '-s', '/world/default/remove',
+        '--reqtype', 'gz.msgs.Entity',
+        '--reptype', 'gz.msgs.Boolean',
+        '--timeout', '2000',
+        '--req', f'name: "{waste_name}", type: MODEL'
+        ]
+        try:
+            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.get_logger().info(f"GAZEBO CMD SENT: {waste_name}")
+        except Exception as e:
+            self.get_logger().error(f"Command failed: {e}")
 
     def stop_robot(self): self.cmd_pub.publish(Twist())
 
