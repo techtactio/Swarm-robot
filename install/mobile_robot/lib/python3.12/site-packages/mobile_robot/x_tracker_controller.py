@@ -17,7 +17,7 @@ class XAxisTrackerAndCleaner(Node):
         self.OFFSET_CLEAN   = 1.6
 
         # === WASTE DETECTION CONFIG ===
-        self.WASTE_DETECT_RANGE = 4.5    
+        self.WASTE_DETECT_RANGE = 8    
         self.WASTE_MERGE_DIST = 0.8        
         self.WASTE_ANGLE_WINDOW = math.radians(90)
         self.waste_registry = {}
@@ -158,7 +158,7 @@ class XAxisTrackerAndCleaner(Node):
         else: self.wait_start_time = None; return True
 
     def move_straight_locked(self, target_yaw, axis_to_hold, target_val):
-        cmd = Twist(); cmd.linear.x = 0.4
+        cmd = Twist(); cmd.linear.x = 0.8
         cyaw = math.atan2(math.sin(self.current_yaw), math.cos(self.current_yaw))
         yaw_err = target_yaw - cyaw
         yaw_err = math.atan2(math.sin(yaw_err), math.cos(yaw_err))
@@ -185,14 +185,21 @@ class XAxisTrackerAndCleaner(Node):
         start = max(0, self.front_idx - half_window)
         end   = min(len(ranges), self.front_idx + half_window)
         
-        global_zone_start = self.start_x + self.partition_min_x
+        global_zone_start = self.start_x - self.partition_min_x
         global_zone_end   = self.start_x + self.map_length
+        # self.get_logger().info(f"gstart: {global_zone_start}")
+        # self.get_logger().info(f"gend: {global_zone_end}")
+        # self.get_logger().info(f"start_x: {self.start_x}")
+        # self.get_logger().info(f"partition: {self.partition_min_x}")
+        valid_x_min = -9.5
+        valid_x_max = 9.5
 
-        valid_x_min = global_zone_start - 0.5 
-        valid_x_max = global_zone_end - 1.0
-        valid_y_min = -9.0
-        valid_y_max = 9.0
+        valid_y_min = -(self.map_length/2)
+        div=self.map_length/self.robot_count
+        valid_y_max = valid_y_min+div
 
+        # self.get_logger().info(f"validymin: {valid_y_min}")
+        # self.get_logger().info(f"ymax: {valid_y_max}")
         for i in range(start, end):
             dist = ranges[i]
             if not math.isfinite(dist) or dist > self.WASTE_DETECT_RANGE: 
@@ -305,7 +312,7 @@ class XAxisTrackerAndCleaner(Node):
                 self.get_logger().info(f"Length: {self.map_length:.2f}") 
                 return
             right = ranges[self.right_idx]
-            cmd = Twist(); error = 0.5 - right; cmd.linear.x = 0.5; cmd.angular.z = 1.5 * error; self.cmd_pub.publish(cmd)
+            cmd = Twist(); error = 0.5 - right; cmd.linear.x = 0.8; cmd.angular.z = 1.5 * error; self.cmd_pub.publish(cmd)
 
         elif self.state == "BACKING_AFTER_MEASURE":
             if self.move_backward(1.0): self.state = "WAITING"

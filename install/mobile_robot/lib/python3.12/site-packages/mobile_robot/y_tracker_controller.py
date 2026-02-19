@@ -173,7 +173,7 @@ class YAxisTrackerAndCleaner(Node):
         elif self.current_front_dist < 1.5:
             cmd.linear.x = 0.2
         else:
-            cmd.linear.x = 0.4
+            cmd.linear.x = 0.8
 
         cyaw = math.atan2(math.sin(self.current_yaw), math.cos(self.current_yaw))
         yaw_err = target_yaw - cyaw
@@ -377,7 +377,7 @@ class YAxisTrackerAndCleaner(Node):
                 return
             left = ranges[self.left_idx]
             cmd = Twist(); error = 0.5 - left
-            cmd.linear.x = 0.4; cmd.angular.z = -1.5 * error
+            cmd.linear.x = 0.8; cmd.angular.z = -1.5 * error
             self.cmd_pub.publish(cmd)
 
         elif self.state == "BACKING_AFTER_MEASURE":
