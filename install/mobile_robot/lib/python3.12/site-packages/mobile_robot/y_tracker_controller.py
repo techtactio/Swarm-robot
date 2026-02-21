@@ -8,7 +8,8 @@ from std_msgs.msg import Float32, Int32
 import numpy as np
 import math
 import subprocess
-
+import json
+from std_msgs.msg import String
 
 
 
@@ -35,6 +36,17 @@ class YAxisTrackerAndCleaner(Node):
 
         self.robot_count_sub = self.create_subscription(Int32, '/swarm_count', self.robot_count_callback, 10)
         self.robot_count = 1 
+        self.robot_id = "robot1" # Y-Axis tracker is robot 1
+        self.transfer_pub = self.create_publisher(String, '/swarm/waste_transfer', 10)
+        self.transfer_sub = self.create_subscription(String, '/swarm/waste_transfer', self.transfer_callback, 10)
+        # === SWARM SYNC ADDITIONS ===
+        
+        # New variables for target claiming
+        self.claimed_wastes = set() 
+        self.current_target_name = None 
+        
+        self.claim_pub = self.create_publisher(String, '/swarm/claimed_waste', 10)
+        self.claim_sub = self.create_subscription(String, '/swarm/claimed_waste', self.claim_callback, 10)
 
         self.state = "MEASURING"
         self.map_width = None
@@ -191,31 +203,134 @@ class YAxisTrackerAndCleaner(Node):
         cmd.angular.z = max(-0.5, min(0.5, correction))
         self.cmd_pub.publish(cmd)
 
+    #====COMMUNICATION LOGIC=====
+
+
+    def request_more_work(self):
+        self.stop_robot()
+        self.state = "REQUESTING_WORK"
+        self.get_logger().info("My queue is empty. Requesting waste list from the swarm...")
+        msg = String()
+        # Broadcast a request for work
+        msg.data = json.dumps({"action": "request", "sender": self.robot_id})
+        self.transfer_pub.publish(msg)
+
+    def transfer_callback(self, msg):
+        data = json.loads(msg.data)
+        
+        # Ignore our own messages
+        if data["sender"] == self.robot_id:
+            return 
+            
+        if data["action"] == "request":
+            # The other bot wants work. Share our list.
+            reply = {
+                "action": "share",
+                "sender": self.robot_id,
+                "wastes": self.detected_wastes,
+                "deleted": list(self.deleted_names)
+            }
+            out_msg = String()
+            out_msg.data = json.dumps(reply)
+            self.transfer_pub.publish(out_msg)
+            
+        elif data["action"] == "share" and self.state == "REQUESTING_WORK":
+            # We asked for work, and the other bot sent us its list
+            for name in data["deleted"]:
+                self.deleted_names.add(name)
+                
+            for w in data["wastes"]:
+                if w["name"] not in self.deleted_names and not any(dw["name"] == w["name"] for dw in self.detected_wastes):
+                    self.detected_wastes.append({'pos': (w['pos'][0], w['pos'][1]), 'name': w['name']})
+                    
+            # === THE FIX: Only resume if there is UNCLAIMED work available ===
+            available_wastes = [w for w in self.detected_wastes if w['name'] not in self.claimed_wastes and w['name'] not in self.deleted_names]
+            
+            if available_wastes:
+                waste_names = [w['name'] for w in available_wastes]
+                self.get_logger().info(f"Received new tasks! AVAILABLE TARGETS: {waste_names}")
+                self.state = "COLLECTING"
+            else:
+                self.get_logger().info("All remaining tasks are claimed by other bots. Swarm tasks complete. FINISHED.")
+                self.state = "FINISHED"
+                self.stop_robot()
+
+    #===For claiming the waste when both attempts to collect the same waste===
+    
+    def claim_callback(self, msg):
+        data = json.loads(msg.data)
+        
+        # Ignore our own messages
+        if data["sender"] != self.robot_id:
+            # Register that the other bot has claimed this waste
+            self.claimed_wastes.add(data["waste_name"])
+            
+            # If we are currently heading for this exact piece of waste, we need to resolve the conflict
+            if self.current_target_name == data["waste_name"]:
+                # Tie-breaker: The robot with the alphabetically "lower" ID wins (robot1 beats robot2)
+                if self.robot_id > data["sender"]:
+                    self.get_logger().info(f"Conflict on {data['waste_name']}. Yielding to {data['sender']}...")
+                    self.current_target_name = None # Drop the target so we pick a new one next loop
+                    self.stop_robot()
+                else:
+                    self.get_logger().info(f"Conflict on {data['waste_name']}. I have priority, keeping target.")
+
+
     # === NEW LOGIC ===
+
     def trigger_rotation_phase(self):
         self.stop_robot()
         if not self.detected_wastes:
-             self.get_logger().info("Partition Reached. No waste. Stopping.")
-             self.state = "FINISHED"
+            self.request_more_work()
         else:
-             self.get_logger().info(f"Partition Reached. Starting Collection of {len(self.detected_wastes)} items.")
-             self.state = "COLLECTING"
+            # Extract just the names for a clean terminal output
+            waste_names = [w['name'] for w in self.detected_wastes]
+            self.get_logger().info(f"CURRENT TARGET LIST: {waste_names}")
+            self.get_logger().info(f"Partition Reached. Starting Collection of {len(self.detected_wastes)} items.")
+            self.state = "COLLECTING"
 
     def navigate_to_waste(self):
-        if not self.detected_wastes:
-            self.get_logger().info("All waste collected.")
-            self.stop_robot()
-            self.state = "FINISHED"
+        # 1. Filter out wastes that have been deleted or claimed by other bots
+        available_wastes = [w for w in self.detected_wastes if w['name'] not in self.claimed_wastes and w['name'] not in self.deleted_names]
+
+        if not available_wastes:
+            self.request_more_work()
             return
 
-        target_dict = self.detected_wastes[-1]
+        # 2. If we don't have an active target, pick the closest available one
+        if self.current_target_name is None:
+            closest_idx = 0
+            min_dist = float('inf')
+            for i, w in enumerate(available_wastes):
+                d = math.hypot(w['pos'][0] - self.world_x, w['pos'][1] - self.world_y)
+                if d < min_dist:
+                    min_dist = d
+                    closest_idx = i
+
+            target_dict = available_wastes[closest_idx]
+            self.current_target_name = target_dict['name']
+            
+            # Broadcast our claim to the swarm
+            claim_msg = String()
+            claim_msg.data = json.dumps({"sender": self.robot_id, "waste_name": self.current_target_name})
+            self.claim_pub.publish(claim_msg)
+            self.get_logger().info(f"Claimed target: {self.current_target_name}")
+
+        # 3. Retrieve our locked target's coordinates
+        target_dict = next((w for w in available_wastes if w['name'] == self.current_target_name), None)
+        
+        # Safety check: If our target vanished (e.g., deleted by the other bot), reset and try again
+        if target_dict is None:
+            self.current_target_name = None
+            return
+
         target_pos = target_dict['pos']
-    
-        # Calculate distance
+        
+        # 4. Standard Navigation Math
         dx = target_pos[0] - self.world_x
         dy = target_pos[1] - self.world_y
         dist = math.sqrt(dx*dx + dy*dy)
-    
+        
         target_angle = math.atan2(dy, dx)
         yaw_err = math.atan2(math.sin(target_angle - self.world_yaw), math.cos(target_angle - self.world_yaw))
 
@@ -223,23 +338,28 @@ class YAxisTrackerAndCleaner(Node):
 
         if abs(yaw_err) > 0.2:
             cmd.angular.z = max(-0.6, min(0.6, 1.5 * yaw_err))
-        # CHANGE THIS: Stop at 0.7m instead of 0.35m
         elif dist > 0.7: 
             cmd.linear.x = 0.2
             cmd.angular.z = 1.0 * yaw_err 
         else:
-            # Remove it from the list immediately so the LiDAR logic stops looking for it
-            self.detected_wastes.pop()
-            # REACHED: Stop robot, delete from Gazebo, THEN remove from memory
+            # 5. Reached Target! Delete and Cleanup
             self.stop_robot()
             self.get_logger().info(f"ACTION: Deleting {target_dict['name']} at dist {dist:.2f}")
-        
-            self.delete_waste_visual(target_dict['name'])
-        
-           
-        
-            # Give Gazebo 0.5 seconds to process the deletion before the robot moves again
             
+            self.deleted_names.add(target_dict['name'])
+            self.delete_waste_visual(target_dict['name'])
+            
+            # Remove from our local lists
+            self.detected_wastes = [w for w in self.detected_wastes if w['name'] != target_dict['name']]
+            self.current_target_name = None # Clear the lock so we can pick a new target next loop
+            
+            waste_names = [w['name'] for w in self.detected_wastes]
+            self.get_logger().info(f"Item collected. REMAINING TARGET LIST: {waste_names}")
+
+            # Check if that was the last available item
+            remaining = [w for w in self.detected_wastes if w['name'] not in self.claimed_wastes]
+            if not remaining:
+                self.request_more_work()
             return 
 
         self.cmd_pub.publish(cmd)
