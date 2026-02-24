@@ -20,9 +20,9 @@ class XAxisTrackerAndCleaner(Node):
         self.OFFSET_CLEAN   = 1.6
 
         # === WASTE DETECTION CONFIG ===
-        self.WASTE_DETECT_RANGE = 8    
+        self.WASTE_DETECT_RANGE = 4.5    
         self.WASTE_MERGE_DIST = 0.8        
-        self.WASTE_ANGLE_WINDOW = math.radians(90)
+        self.WASTE_ANGLE_WINDOW = math.radians(60)
         self.waste_registry = {}
         self.load_waste_map()
         self.deleted_names = set()
@@ -159,7 +159,7 @@ class XAxisTrackerAndCleaner(Node):
         dy = self.current_y - self.backup_start_pos[1]
         dist_moved = math.sqrt(dx*dx + dy*dy)
         if dist_moved < distance:
-            cmd = Twist(); cmd.linear.x = -0.2; self.cmd_pub.publish(cmd); return False
+            cmd = Twist(); cmd.linear.x = -0.4; self.cmd_pub.publish(cmd); return False
         else:
             self.cmd_pub.publish(Twist()); self.backup_start_pos = None; return True
 
@@ -208,19 +208,32 @@ class XAxisTrackerAndCleaner(Node):
         valid_x_min = -9.5
         valid_x_max = 9.5
 
-        valid_y_min = -(self.map_length/2)
-        div=self.map_length/self.robot_count
-        valid_y_max = valid_y_min+div
+        # --- Y-AXIS PARTITION OVERLAP ---
+        BUFFER_ZONE = 1.0
+        
+        valid_y_min = -(self.map_length / 2.0)
+        div = self.map_length / float(self.robot_count)
+        
+        # Robot 2 takes the LOWER half.
+        # It scans all the way up to the partition line, PLUS the buffer zone.
+        valid_y_max = valid_y_min + div + BUFFER_ZONE
 
         # self.get_logger().info(f"validymin: {valid_y_min}")
         # self.get_logger().info(f"ymax: {valid_y_max}")
-        for i in range(start, end):
+        for i in range(len(ranges)):
             dist = ranges[i]
             if not math.isfinite(dist) or dist > self.WASTE_DETECT_RANGE: 
                 continue
             
-            angle = scan.angle_min + i * scan.angle_increment
-            global_angle = self.world_yaw + angle
+            # Calculate the exact angle of this ray and normalize to [-pi, pi]
+            raw_angle = scan.angle_min + i * scan.angle_increment
+            local_angle = math.atan2(math.sin(raw_angle), math.cos(raw_angle))
+            
+            # Check if this ray is within your desired field of view (e.g., 90 deg)
+            if abs(local_angle) > self.WASTE_ANGLE_WINDOW:
+                continue
+                
+            global_angle = self.world_yaw + raw_angle
             
             waste_x = self.world_x + dist * math.cos(global_angle)
             waste_y = self.world_y + dist * math.sin(global_angle)
@@ -249,8 +262,8 @@ class XAxisTrackerAndCleaner(Node):
                         self.detected_wastes.append({'pos': (waste_x, waste_y), 'name': real_name})
                         self.get_logger().info(f"R2 REGISTERED: {real_name}")
                 
-                break
-
+                # FIX 3: Removed the 'break' statement here so the Lidar 
+                # can continue sweeping and find multiple wastes in a single scan frame.
     #====COMMUNICATION LOGIC====
 
     def request_more_work(self):
@@ -384,7 +397,7 @@ class XAxisTrackerAndCleaner(Node):
         if abs(yaw_err) > 0.2:
             cmd.angular.z = max(-0.6, min(0.6, 1.5 * yaw_err))
         elif dist > 0.7: 
-            cmd.linear.x = 0.2
+            cmd.linear.x = 0.8
             cmd.angular.z = 1.0 * yaw_err 
         else:
             # 5. Reached Target! Delete and Cleanup

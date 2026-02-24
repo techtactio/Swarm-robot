@@ -25,7 +25,7 @@ class YAxisTrackerAndCleaner(Node):
         self.WASTE_MERGE_DIST = 0.8 
         self.waste_registry = {} # <--- ADD THIS
         self.load_waste_map()        
-        self.WASTE_ANGLE_WINDOW = math.radians(90) 
+        self.WASTE_ANGLE_WINDOW = math.radians(60) 
         
         self.cmd_pub = self.create_publisher(Twist, '/robot1/cmd_vel', 10)
         self.dim_pub = self.create_publisher(Float32, '/map/width', 10)
@@ -339,7 +339,7 @@ class YAxisTrackerAndCleaner(Node):
         if abs(yaw_err) > 0.2:
             cmd.angular.z = max(-0.6, min(0.6, 1.5 * yaw_err))
         elif dist > 0.7: 
-            cmd.linear.x = 0.2
+            cmd.linear.x = 0.6
             cmd.angular.z = 1.0 * yaw_err 
         else:
             # 5. Reached Target! Delete and Cleanup
@@ -376,16 +376,26 @@ class YAxisTrackerAndCleaner(Node):
             if 0.3 < dist < self.WASTE_DETECT_RANGE:
                 angle = scan.angle_min + i * scan.angle_increment
                 
-                # Global Calc
+                # Global Calc                     
                 global_angle = self.world_yaw + angle
                 waste_x = self.world_x + dist * math.cos(global_angle)
                 waste_y = self.world_y + dist * math.sin(global_angle)
-                
-                if abs(waste_x) > (self.partition_max_x - 1.0): 
+                                                                           
+                if abs(waste_x) > (self.partition_max_x +0.05): 
                     continue 
 
-                if self.map_width is not None:
-                    if waste_y < 0.8 or waste_y > (self.map_width - 0.8):
+                # --- Y-AXIS PARTITION OVERLAP ---
+                BUFFER_ZONE = 1.0
+                
+                if self.map_length is not None:
+                    # Calculate the center dividing line exactly like Robot 2 does
+                    y_min_edge = -(self.map_length / 2.0)
+                    div = self.map_length / self.robot_count
+                    partition_line_y = y_min_edge + div
+                    
+                    # Robot 1 takes the UPPER half. 
+                    # It scans all the way down to the partition line, MINUS the buffer zone.
+                    if waste_y < (partition_line_y - BUFFER_ZONE):
                         continue
 
                 
@@ -419,8 +429,7 @@ class YAxisTrackerAndCleaner(Node):
                             self.detected_wastes.append({'pos': (waste_x, waste_y), 'name': real_name})
                             self.get_logger().info(f"REGISTERED: {real_name}")
                 
-                    # THIS BREAK MUST BE AT THIS INDENTATION LEVEL (line 284 in your image)
-                    break 
+                    #
     # =================
 
     def run_cleaning_fsm(self):
@@ -507,49 +516,37 @@ class YAxisTrackerAndCleaner(Node):
             self.check_start_cleaning()
 
         elif self.state == "CLEANING":
-            # 1. Determine if we are near a wall (to avoid trying to "clean" the room boundaries)
-            is_near_wall = False
-            if self.clean_step in [4, 10]: 
-                if self.current_y < 0.8 or self.current_y > (self.map_width - 0.8):
-                    is_near_wall = True
+           # 1. Tighter wall check so we don't ignore waste near the top/bottom
+            is_near_wall = (self.current_y < 0.4 or self.current_y > (self.map_width - 0.4))
 
-            # 2. Check for physical blockage (Waste)
-            # We use a 0.8m threshold to match your collection logic
-            BLOCK_DIST = 1.0 # Detection range
-            if self.current_front_dist < BLOCK_DIST and not is_near_wall:
+            # 2. Automatic Delete: If something is directly in front
+            if self.current_front_dist < 0.85 and not is_near_wall:
                 self.stop_robot()
 
-                if self.detected_wastes:
-                    # USE THE ACTUAL ANGLE of the beam that detected the waste
-                    # world_yaw (robot heading) + best_blocker_angle (beam offset)
-                    total_angle = self.world_yaw + self.best_blocker_angle
-                    obs_x = self.world_x + self.current_front_dist * math.cos(total_angle)
-                    obs_y = self.world_y + self.current_front_dist * math.sin(total_angle)
+                # Calculate position of the blocker
+                total_angle = self.world_yaw + self.best_blocker_angle
+                obs_x = self.world_x + self.current_front_dist * math.cos(total_angle)
+                obs_y = self.world_y + self.current_front_dist * math.sin(total_angle)
 
-                    best_idx = -1
-                    min_dist_found = 1.0 
-        
-                    for i, waste in enumerate(self.detected_wastes):
-                        wx, wy = waste['pos']
-                        if math.hypot(obs_x - wx, obs_y - wy) < min_dist_found:
-                            min_dist_found = math.hypot(obs_x - wx, obs_y - wy)
-                            best_idx = i
+                # Search memory for the closest waste item
+                best_idx = -1
+                min_match_dist = 1.2 
+                for i, waste in enumerate(self.detected_wastes):
+                    wx, wy = waste['pos']
+                    if math.hypot(obs_x - wx, obs_y - wy) < min_match_dist:
+                        min_match_dist = math.hypot(obs_x - wx, obs_y - wy)
+                        best_idx = i
 
-                    if best_idx != -1:
-                        target_name = self.detected_wastes[best_idx]['name']
-                        if target_name not in self.deleted_names:
-                            self.get_logger().info(f"MATCH FOUND (Side): Deleting {target_name}")
-                            self.deleted_names.add(target_name)
-                            self.delete_waste_visual(target_name)
-                            self.detected_wastes.pop(best_idx)
-                            
-                            # Re-anchor to prevent rotation drift
-                            if self.clean_step in [1, 7]: self.fixed_axis_value = self.current_y
-                            elif self.clean_step in [4, 10]: self.fixed_axis_value = self.current_x
-                            
-                            return self.wait_in_place(1.0)
-            # 3. Only scan for new waste if we aren't currently blocked
-            if self.clean_step in [1, 4, 7, 10]:
+                if best_idx != -1:
+                    target_name = self.detected_wastes[best_idx]['name']
+                    self.get_logger().info(f"AUTO-DELETE: {target_name}")
+                    self.delete_waste_visual(target_name)
+                    self.deleted_names.add(target_name)
+                    self.detected_wastes.pop(best_idx)
+                    return self.wait_in_place(1.0) # Wait for deletion to process
+
+            # 3. Always scan for waste while moving
+            if self.clean_step in [0, 1, 4, 7, 10]:
                 self.scan_for_waste(scan, ranges)
 
             self.run_cleaning_fsm()
