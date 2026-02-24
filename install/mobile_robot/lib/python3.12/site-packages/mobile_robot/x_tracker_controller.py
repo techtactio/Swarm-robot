@@ -49,6 +49,15 @@ class XAxisTrackerAndCleaner(Node):
         self.claim_pub = self.create_publisher(String, '/swarm/claimed_waste', 10)
         self.claim_sub = self.create_subscription(String, '/swarm/claimed_waste', self.claim_callback, 10)
 
+        # === COLLISION AVOIDANCE ADDITIONS ===
+        self.swarm_positions = {}
+        self.YIELD_DISTANCE = 1.5 
+        
+        self.telemetry_pub = self.create_publisher(String, '/swarm/telemetry', 10)
+        self.telemetry_sub = self.create_subscription(String, '/swarm/telemetry', self.telemetry_callback, 10)
+        self.telemetry_timer = self.create_timer(0.1, self.publish_telemetry) # Broadcast at 10Hz
+        # =======================================
+
         self.state = "MEASURING"
         self.map_length = None
         self.map_width = None
@@ -335,6 +344,28 @@ class XAxisTrackerAndCleaner(Node):
                     self.get_logger().info(f"Conflict on {data['waste_name']}. I have priority, keeping target.")
 
 
+
+    # === COLLISION AVOIDANCE LOGIC ===
+    def publish_telemetry(self):
+        msg = String()
+        data = {
+            "sender": self.robot_id,
+            "x": self.world_x,
+            "y": self.world_y,
+            "state": self.state
+        }
+        msg.data = json.dumps(data)
+        self.telemetry_pub.publish(msg)
+
+    def telemetry_callback(self, msg):
+        data = json.loads(msg.data)
+        sender = data["sender"]
+        
+        # Track the position of any robot that isn't us
+        if sender != self.robot_id:
+            self.swarm_positions[sender] = (data["x"], data["y"], data.get("state", "UNKNOWN"))
+    # =================================
+
     # === NEW COLLECTION LOGIC ===
     def trigger_collection_phase(self):
         self.stop_robot()
@@ -377,14 +408,47 @@ class XAxisTrackerAndCleaner(Node):
         # 3. Retrieve our locked target's coordinates
         target_dict = next((w for w in available_wastes if w['name'] == self.current_target_name), None)
         
-        # Safety check: If our target vanished (e.g., deleted by the other bot), reset and try again
-        if target_dict is None:
-            self.current_target_name = None
-            return
+        # === 4. COLLISION AVOIDANCE CHECK ===
+        # Update the loop to unpack 3 variables now (ox, oy, other_state)
+        for other_id, (ox, oy, other_state) in self.swarm_positions.items():
+            dist_to_other = math.hypot(self.world_x - ox, self.world_y - oy)
+            
+            if dist_to_other < self.YIELD_DISTANCE:
+                
+                # NEW LOGIC: Is the other robot parked/finished?
+                if other_state == "FINISHED":
+                    # Calculate where the parked robot is relative to our current heading
+                    angle_to_other = math.atan2(oy - self.world_y, ox - self.world_x)
+                    relative_yaw = math.atan2(math.sin(angle_to_other - self.world_yaw), math.cos(angle_to_other - self.world_yaw))
+                    
+                    evade_cmd = Twist()
+                    evade_cmd.linear.x = 0.2  # Keep moving forward slowly
+                    
+                    # If it is on our left (positive yaw), steer right. Otherwise, steer left.
+                    if relative_yaw > 0:
+                        evade_cmd.angular.z = -0.8 
+                    else:
+                        evade_cmd.angular.z = 0.8
+                        
+                    self.cmd_pub.publish(evade_cmd)
+                    
+                    if not hasattr(self, 'last_evade_log') or (self.get_clock().now().nanoseconds - self.last_evade_log) > 1e9:
+                        self.get_logger().info(f"EVADING: Steering around parked {other_id}...")
+                        self.last_evade_log = self.get_clock().now().nanoseconds
+                        
+                    return # Exit function so normal navigation doesn't override the evasion
+                
+                # ORIGINAL LOGIC: The other robot is still active, apply normal traffic rules
+                elif self.robot_id > other_id:
+                    self.stop_robot()
+                    if not hasattr(self, 'last_yield_log') or (self.get_clock().now().nanoseconds - self.last_yield_log) > 1e9:
+                        self.get_logger().info(f"TRAFFIC YIELD: Waiting for {other_id} to pass. (Dist: {dist_to_other:.2f}m)")
+                        self.last_yield_log = self.get_clock().now().nanoseconds
+                    return
 
+        # ====================================
         target_pos = target_dict['pos']
-        
-        # 4. Standard Navigation Math
+        # 5. Standard Navigation Math
         dx = target_pos[0] - self.world_x
         dy = target_pos[1] - self.world_y
         dist = math.sqrt(dx*dx + dy*dy)
@@ -400,7 +464,7 @@ class XAxisTrackerAndCleaner(Node):
             cmd.linear.x = 0.8
             cmd.angular.z = 1.0 * yaw_err 
         else:
-            # 5. Reached Target! Delete and Cleanup
+            # 6. Reached Target! Delete and Cleanup
             self.stop_robot()
             self.get_logger().info(f"ACTION: Deleting {target_dict['name']} at dist {dist:.2f}")
             
