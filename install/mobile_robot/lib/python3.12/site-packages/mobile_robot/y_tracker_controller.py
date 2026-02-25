@@ -39,6 +39,9 @@ class YAxisTrackerAndCleaner(Node):
         self.robot_id = "robot1" # Y-Axis tracker is robot 1
         self.transfer_pub = self.create_publisher(String, '/swarm/waste_transfer', 10)
         self.transfer_sub = self.create_subscription(String, '/swarm/waste_transfer', self.transfer_callback, 10)
+        
+        self.deleted_pub = self.create_publisher(String, '/swarm/deleted_waste', 10)
+        self.deleted_sub = self.create_subscription(String, '/swarm/deleted_waste', self.deleted_callback, 10)
         # === SWARM SYNC ADDITIONS ===
         
         # New variables for target claiming
@@ -284,6 +287,25 @@ class YAxisTrackerAndCleaner(Node):
                 else:
                     self.get_logger().info(f"Conflict on {data['waste_name']}. I have priority, keeping target.")
 
+
+    #===For syncing deleted wastes in real-time===
+    def deleted_callback(self, msg):
+        data = json.loads(msg.data)
+        
+        if data["sender"] != self.robot_id:
+            waste_name = data["waste_name"]
+            
+            # 1. Add to our deleted ledger
+            self.deleted_names.add(waste_name)
+            
+            # 2. Strip it out of our detected list if we had it
+            self.detected_wastes = [w for w in self.detected_wastes if w['name'] != waste_name]
+            
+            # 3. If we were actively driving towards it, stop and drop the target!
+            if self.current_target_name == waste_name:
+                self.get_logger().info(f"GHOST TARGET: {waste_name} was just collected by {data['sender']}! Rerouting...")
+                self.current_target_name = None
+                self.stop_robot()
 
     # === COLLISION AVOIDANCE LOGIC ===
     def publish_telemetry(self):
@@ -651,6 +673,9 @@ class YAxisTrackerAndCleaner(Node):
             # Use Popen instead of run so it doesn't block the robot's movement
             subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.get_logger().info(f"GAZEBO CMD SENT: {waste_name}")
+            msg = String()
+            msg.data = json.dumps({"sender": self.robot_id, "waste_name": waste_name})
+            self.deleted_pub.publish(msg)
         except Exception as e:
             self.get_logger().error(f"Command failed: {e}")
 
