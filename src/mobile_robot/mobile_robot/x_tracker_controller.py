@@ -16,6 +16,8 @@ class XAxisTrackerAndCleaner(Node):
     def __init__(self):
         super().__init__('x_axis_tracker')
 
+        self.min_scanned_x = float('inf')  # <--- NEW MEMORY VARIABLE
+
         self.OFFSET_MEASURE = 0.6 
         self.OFFSET_CLEAN   = 1.6
 
@@ -104,11 +106,30 @@ class XAxisTrackerAndCleaner(Node):
             self.get_logger().error(f"Could not load map: {e}")
 
     def robot_count_callback(self, msg):
-        if msg.data > self.robot_count:
+        # React if the swarm size changes in EITHER direction
+        if msg.data != self.robot_count and msg.data > 0:
+            old_count = self.robot_count
             self.robot_count = msg.data
             self.get_logger().info(f"Updated Swarm Size: {self.robot_count} robots")
-            if self.state == "WAITING" and self.map_length is not None:
-                self.check_start_cleaning()
+            
+            if self.map_length is not None:
+                # R2 sweeps backwards. If 2 robots: stops halfway. If 1 robot: sweeps to 0.0
+                if self.robot_count > 1:
+                    self.partition_min_x = self.map_length/self.robot_count
+                else:
+                    self.partition_min_x = 0.0
+                
+                # If the count went DOWN, someone died. Expand territory!
+                if self.robot_count < old_count:
+                    self.get_logger().warn(f"Swarm size decreased! Partition Expanded. Sweeping until X: {self.partition_min_x:.2f}")
+                    self.swarm_positions.clear()
+                    self.claimed_wastes.clear()
+                    
+                    if self.state == "REQUESTING_WORK":
+                        self.request_more_work()
+                else:
+                    self.get_logger().info(f"Partition Updated Live: X Limit = {self.partition_min_x:.2f}")
+
 
     def width_callback(self, msg):
         self.map_width = msg.data
@@ -187,7 +208,14 @@ class XAxisTrackerAndCleaner(Node):
         else: self.wait_start_time = None; return True
 
     def move_straight_locked(self, target_yaw, axis_to_hold, target_val):
-        cmd = Twist(); cmd.linear.x = 0.8
+        cmd = Twist(); 
+        if self.current_front_dist < 0.6:
+            cmd.linear.x = 0.1 # Very slow for final approach
+        elif self.current_front_dist < 1.5:
+            cmd.linear.x = 0.2
+        else:
+            cmd.linear.x = 0.8
+            
         cyaw = math.atan2(math.sin(self.current_yaw), math.cos(self.current_yaw))
         yaw_err = target_yaw - cyaw
         yaw_err = math.atan2(math.sin(yaw_err), math.cos(yaw_err))
@@ -283,12 +311,26 @@ class XAxisTrackerAndCleaner(Node):
 
     def request_more_work(self):
         self.stop_robot()
+        
+        if self.min_scanned_x > (self.partition_min_x + 1.0):
+            self.get_logger().info(f"Resuming sweep. Transiting to frontier X={self.min_scanned_x:.2f}...")
+            self.current_target_name = None
+            self.state = "TRANSIT_TO_FRONTIER" # <--- CHANGED STATE
+            return
+
+        # === THE FAULT TOLERANCE ALONE CHECK ===
+        if self.robot_count <= 1:
+            self.get_logger().info("Map fully swept. Queue empty. Swarm dead. FINISHED.")
+            self.state = "FINISHED"
+            return
+        # =======================================
+
         self.state = "REQUESTING_WORK"
         self.get_logger().info("My queue is empty. Requesting waste list from the swarm...")
         msg = String()
-        # Broadcast a request for work
         msg.data = json.dumps({"action": "request", "sender": self.robot_id})
         self.transfer_pub.publish(msg)
+
 
     def transfer_callback(self, msg):
         data = json.loads(msg.data)
@@ -548,9 +590,33 @@ class XAxisTrackerAndCleaner(Node):
         elif self.state == "WAITING":
             self.check_start_cleaning()
 
+        elif self.state == "TRANSIT_TO_FRONTIER":
+            if self.current_front_dist < 0.8:
+                self.get_logger().info("Obstacle in transit path. Starting sweep early.")
+                self.state = "CLEANING"
+                self.clean_step = 0
+                return
+
+            # 2. Turn to face backwards (-X axis is pi radians)
+            target_yaw = math.pi
+            if self.turn_in_place(target_yaw):
+                # 3. Drive straight until we reach our minimum scanned line
+                if self.current_x > self.min_scanned_x:
+                    cmd = Twist()
+                    cmd.linear.x = 0.8
+                    cyaw = math.atan2(math.sin(self.current_yaw), math.cos(self.current_yaw))
+                    yaw_err = math.atan2(math.sin(target_yaw - cyaw), math.cos(target_yaw - cyaw))
+                    cmd.angular.z = max(-0.5, min(0.5, 1.5 * yaw_err))
+                    self.cmd_pub.publish(cmd)
+                else:
+                    self.stop_robot()
+                    self.get_logger().info("Arrived at frontier. Resuming S-Shape sweep!")
+                    self.state = "CLEANING"
+                    self.clean_step = 0
+
         elif self.state == "CLEANING":
             # REMOVED: is_near_wall logic that was falsely ignoring waste near the edges.
-            
+            self.min_scanned_x = min(self.min_scanned_x, self.current_x)
             BLOCK_DIST = 1.0
             # TRIGGER ALWAYS: Check for waste if anything gets within 1.0m
             if self.current_front_dist < BLOCK_DIST:

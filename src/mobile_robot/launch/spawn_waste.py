@@ -2,34 +2,36 @@ import sys
 import random
 import subprocess
 import time
-import math  # Added math module for distance calculation
+import math
 
 def spawn_waste():
-    # Number of waste items to spawn
-    N_WASTE = 10
+    # --- HARDCODED RANGE: 10 to 20 ---
+    MIN_RANGE = 10
+    MAX_RANGE = 20
+    N_WASTE = random.randint(MIN_RANGE, MAX_RANGE)
     
     # Arena Bounds
     MIN_XY = -8.5
     MAX_XY = 8.5
     
-    # --- NEW SPATIAL CONSTRAINTS ---
-    MIN_DIST_BETWEEN_WASTE = 1.5  # Minimum distance (in meters) between items
-    MAX_RETRIES = 100             # Prevent infinite loops if the arena gets too crowded
+    # SPATIAL CONSTRAINTS
+    MIN_DIST_BETWEEN_WASTE = 1.5  # Minimum distance between items
+    MAX_RETRIES = 100             # Prevent infinite loops
     
     waste_map = []
-    accepted_positions = []       # List to store (x, y) tuples of spawned waste
+    accepted_positions = []
 
-    print(f"Spawning {N_WASTE} waste items (1 fixed, {N_WASTE-1} random)...")
+    print(f"Starting spawn sequence...")
+    print(f"Randomly selected to spawn {N_WASTE} waste items.")
 
     for i in range(N_WASTE):
         
-        # --- NEW: FORCE FIRST WASTE AT PARTITION LINE ---
+        # 1. FORCE FIRST WASTE AT PARTITION LINE
         if i == 0:
             rx, ry = -7.0, 0.16
             position_found = True
-            print(f"--> Placing waste_0 precisely at the partition line: ({rx}, {ry})")
+            print(f"--> [Fixed] waste_0 placed at partition: ({rx}, {ry})")
         else:
-            # 1. Generate Random Position with constraints for the rest
             rx, ry = 0.0, 0.0
             position_found = False
             retries = 0
@@ -38,39 +40,35 @@ def spawn_waste():
                 rx = random.uniform(MIN_XY, MAX_XY)
                 ry = random.uniform(MIN_XY, MAX_XY)
                 
-                # A. SAFE ZONE CHECK (Keep away from robot start zones)
+                # A. SAFE ZONE CHECK (Robot start zones)
                 if rx < -8.0 and ry > 7.0:
                     retries += 1
                     continue
                 
-                # B. MINIMUM DISTANCE CHECK (Keep away from other waste)
+                # B. MINIMUM DISTANCE CHECK
                 too_close = False
                 for (px, py) in accepted_positions:
                     dist = math.hypot(rx - px, ry - py)
                     if dist < MIN_DIST_BETWEEN_WASTE:
                         too_close = True
-                        break  # Break out of the inner for-loop early
+                        break 
                 
                 if too_close:
                     retries += 1
                     continue
                 
-                # If it passes both checks, mark as found and break the while loop
                 position_found = True
                 break
         
-        # If we couldn't find a spot after MAX_RETRIES, skip this item
         if not position_found:
-            print(f"Warning: Could not find a valid location for waste_{i} after {MAX_RETRIES} attempts. Skipping.")
+            print(f"Warning: Could not find a valid location for waste_{i}. Skipping.")
             continue
             
-        # Add the valid position to our tracking list
         accepted_positions.append((rx, ry))
-
         name = f"waste_{i}"
         waste_map.append(f"{name},{rx},{ry}\n")
         
-        # 2. Define the SDF for a Green Pole (Waste)
+        # SDF for a Green Pole
         sdf_xml = f"""
 <?xml version='1.0'?>
 <sdf version='1.7'>
@@ -88,7 +86,7 @@ def spawn_waste():
 </model>
 </sdf>
 """
-        # 3. Build the ROS 2 command to spawn it
+        # ROS 2 spawn command
         cmd = [
             'ros2', 'run', 'ros_gz_sim', 'create',
             '-world', 'default',
@@ -99,13 +97,15 @@ def spawn_waste():
             '-z', '0.0'
         ]
 
-        # 4. Execute
         subprocess.run(cmd)
-        time.sleep(0.2) 
+        time.sleep(0.1) 
         
     with open("waste_locations.csv", "w") as f:
         f.writelines(waste_map)
-    print(f"Map saved with {len(waste_map)} items.")
+    
+    print("-" * 30)
+    print(f"SUCCESS: {len(waste_map)} items spawned.")
+    print(f"Coordinates saved to 'waste_locations.csv'")
 
 if __name__ == "__main__":
     spawn_waste()

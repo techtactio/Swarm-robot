@@ -1,48 +1,65 @@
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import String, Int32  # Import Int32
+from std_msgs.msg import Int32, String
+import json
 
 class RobotChat(Node):
     def __init__(self):
         super().__init__('robot_chat')
         
         self.my_name = self.get_namespace().strip('/')
-        self.known_robots = set()
-        self.known_robots.add(self.my_name)
+        self.known_robots = {}
 
-        # 1. Swarm Chat (Existing)
-        self.chat_pub = self.create_publisher(String, '/swarm_chat', 10)
-        self.chat_sub = self.create_subscription(String, '/swarm_chat', self.listener_callback, 10)
+        # 1. THE FIX: Listen to the ACTUAL tracker telemetry, not a separate chat!
+        self.telemetry_sub = self.create_subscription(String, '/swarm/telemetry', self.telemetry_callback, 10)
         
-        # 2. COUNT PUBLISHER (New!)
-        # We publish the count globally so everyone agrees on the number
         self.count_pub = self.create_publisher(Int32, '/swarm_count', 10)
 
-        self.timer = self.create_timer(2.0, self.say_hello)
-        self.get_logger().info(f"Robot Chat initialized for: {self.my_name}")
+        # 2. Faster timeout: Since telemetry runs at 10Hz, 2 seconds of silence means it crashed.
+        self.health_timer = self.create_timer(1.0, self.check_active_robots)
+        self.DEAD_TIMEOUT_NS = 2.0 * 1e9 
 
-    def say_hello(self):
-        msg = String()
-        msg.data = self.my_name
-        self.chat_pub.publish(msg)
-        
-        # Also re-publish the current count periodically, just in case
-        count_msg = Int32()
-        count_msg.data = len(self.known_robots)
-        self.count_pub.publish(count_msg)
+        self.get_logger().info(f"Swarm Health Monitor initialized for: {self.my_name}")
 
-    def listener_callback(self, msg):
-        sender_name = msg.data
+    def telemetry_callback(self, msg):
+        try:
+            data = json.loads(msg.data)
+            sender_name = data["sender"]
+            now = self.get_clock().now().nanoseconds
+            
+            # If we see a new tracker online
+            if sender_name not in self.known_robots:
+                self.known_robots[sender_name] = now
+                count = len(self.known_robots)
+                
+                self.get_logger().info(f'👋 Found active robot: {sender_name}. Total: {count}')
+                
+                count_msg = Int32()
+                count_msg.data = count
+                self.count_pub.publish(count_msg)
+            else:
+                # Keep the heartbeat fresh
+                self.known_robots[sender_name] = now
+        except Exception as e:
+            pass
+
+    def check_active_robots(self):
+        now = self.get_clock().now().nanoseconds
+        dead_robots = []
         
-        if sender_name not in self.known_robots:
-            self.known_robots.add(sender_name)
-            count = len(self.known_robots)
+        # Check if ANY robot's tracker has stopped publishing telemetry
+        for robot, last_seen in self.known_robots.items():
+            if (now - last_seen) > self.DEAD_TIMEOUT_NS:
+                dead_robots.append(robot)
+                
+        # If a tracker died, remove it and broadcast the lower count
+        if dead_robots:
+            for dead in dead_robots:
+                del self.known_robots[dead]
+                self.get_logger().warn(f'💀 Robot tracker lost: {dead}. Total now: {len(self.known_robots)}')
             
-            self.get_logger().info(f'👋 Found new robot: {sender_name}. Total: {count}')
-            
-            # Publish new count immediately when found
             count_msg = Int32()
-            count_msg.data = count
+            count_msg.data = len(self.known_robots)
             self.count_pub.publish(count_msg)
 
 def main(args=None):
