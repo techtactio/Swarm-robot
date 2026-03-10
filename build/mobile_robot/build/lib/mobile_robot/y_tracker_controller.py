@@ -246,8 +246,8 @@ class YAxisTrackerAndCleaner(Node):
 
         # === THE FAULT TOLERANCE ALONE CHECK ===
         if self.robot_count <= 1:
-            self.get_logger().info("Map fully swept. Queue empty. Swarm dead. FINISHED.")
-            self.state = "FINISHED"
+            self.get_logger().info("Map fully swept. Returning home...")
+            self.state = "RETURN_TO_ORIGIN"
             return
         # =======================================
 
@@ -294,7 +294,7 @@ class YAxisTrackerAndCleaner(Node):
                 self.state = "COLLECTING"
             else:
                 self.get_logger().info("All remaining tasks are claimed by other bots. Swarm tasks complete. FINISHED.")
-                self.state = "FINISHED"
+                self.state = "RETURN_TO_ORIGIN"
                 self.stop_robot()
 
     #===For claiming the waste when both attempts to collect the same waste===
@@ -371,6 +371,62 @@ class YAxisTrackerAndCleaner(Node):
             self.get_logger().info(f"Partition Reached. Starting Collection of {len(self.detected_wastes)} items.")
             self.state = "COLLECTING"
 
+    def navigate_to_origin(self):
+        # Target: Fixed Bottom-Left Corner with safety buffer
+        # (Use target_x = -8.5 for X-tracker to give some space)
+        target_x, target_y = -9.2, 9.2   
+        
+        dx = target_x - self.world_x
+        dy = target_y - self.world_y
+        dist = math.sqrt(dx*dx + dy*dy)
+        
+        if dist < 0.3:
+            self.stop_robot()
+            self.get_logger().info(f"{self.robot_id} has arrived and parked.")
+            self.state = "FINISHED"
+            return
+
+        # === INTEGRATED EVASION CHECK ===
+        for other_id, (ox, oy, other_state) in self.swarm_positions.items():
+            dist_to_other = math.hypot(self.world_x - ox, self.world_y - oy)
+            
+            # If a robot is in our way (within 0.8m)
+            if dist_to_other < 0.8:
+                angle_to_other = math.atan2(oy - self.world_y, ox - self.world_x)
+                relative_yaw = math.atan2(math.sin(angle_to_other - self.world_yaw), 
+                                         math.cos(angle_to_other - self.world_yaw))
+                
+                # If they are in front of us (within a 45-degree cone)
+                if abs(relative_yaw) < 0.8:
+                    cmd = Twist()
+                    if other_state == "FINISHED":
+                        # STEER AROUND STATIC: Drive slowly and turn away
+                        self.get_logger().info(f"Steering around parked {other_id}")
+                        cmd.linear.x = 0.2
+                        cmd.angular.z = -1.0 if relative_yaw > 0 else 1.0
+                    else:
+                        # YIELD TO MOVING: If they have priority (lower ID), stop/slow down
+                        if self.robot_id > other_id:
+                            self.get_logger().info(f"Yielding to moving {other_id}")
+                            self.stop_robot()
+                            return
+                    
+                    self.cmd_pub.publish(cmd)
+                    return
+        # ================================
+
+        # Normal Navigation if path is clear
+        target_angle = math.atan2(dy, dx)
+        yaw_err = math.atan2(math.sin(target_angle - self.world_yaw), 
+                             math.cos(target_angle - self.world_yaw))
+
+        cmd = Twist()
+        if abs(yaw_err) > 0.2:
+            cmd.angular.z = max(-0.7, min(0.7, 1.8 * yaw_err))
+        else:
+            cmd.linear.x = 0.5 
+            cmd.angular.z = 1.2 * yaw_err
+        self.cmd_pub.publish(cmd)
     def navigate_to_waste(self):
         # 1. Filter out wastes that have been deleted or claimed by other bots
         available_wastes = [w for w in self.detected_wastes if w['name'] not in self.claimed_wastes and w['name'] not in self.deleted_names]
@@ -695,6 +751,8 @@ class YAxisTrackerAndCleaner(Node):
             self.run_cleaning_fsm()
         elif self.state == "COLLECTING":
             self.navigate_to_waste()
+        elif self.state == "RETURN_TO_ORIGIN":
+            self.navigate_to_origin()
 
         elif self.state == "FINISHED":
             self.stop_robot()
